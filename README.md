@@ -136,6 +136,50 @@ watch.bat
 
 The script de-duplicates images by SHA-256 hash, so fetching the same image again will not duplicate the timeline.
 
+## Host The History From This Machine
+
+The downloaded history lives in `data\images`, `data\timeline.csv`, and
+`data\timeline.html`. Those files are intentionally not pushed to GitHub, so
+host them from the machine that is collecting the images.
+
+Start the local history server:
+
+```powershell
+python .\scripts\serve_history.py --host 0.0.0.0 --port 8000
+```
+
+On Windows you can also double-click:
+
+```text
+serve_history.bat
+```
+
+The server prints links like:
+
+```text
+Local:   http://127.0.0.1:8000/data/timeline.html
+Network: http://192.168.1.50:8000/data/timeline.html
+```
+
+Use the `Local` link on this PC. Give the `Network` link to people on the same
+Wi-Fi or LAN.
+
+For people outside your home network, use a tunnel service pointed at the local
+server:
+
+```powershell
+cloudflared tunnel --url http://127.0.0.1:8000
+```
+
+That command prints a public `https://...trycloudflare.com` URL. Open:
+
+```text
+https://your-tunnel-url.trycloudflare.com/data/timeline.html
+```
+
+Leave both the fetcher and the history server running if you want the public
+page to keep updating.
+
 ## Custom Page Selection
 
 By default the script fetches both webcam pages. To fetch only one page, pass
