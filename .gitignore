@@ -3,6 +3,8 @@ data/timeline.csv
 data/timeline.html
 data/flights.csv
 data/log.txt
+data/server.log
+data/server.err.log
 data/debug_*
 data/*.jpg
 __pycache__/
