@@ -168,7 +168,13 @@ For people outside your home network, use a tunnel service pointed at the local
 server:
 
 ```powershell
-cloudflared tunnel --url http://127.0.0.1:8000
+cloudflared tunnel --protocol http2 --url http://127.0.0.1:8000
+```
+
+On Windows you can also double-click:
+
+```text
+start_public_tunnel.bat
 ```
 
 That command prints a public `https://...trycloudflare.com` URL. Open:

@@ -5,6 +5,8 @@ data/flights.csv
 data/log.txt
 data/server.log
 data/server.err.log
+data/cloudflared.log
+data/cloudflared.err.log
 data/debug_*
 data/*.jpg
 __pycache__/
