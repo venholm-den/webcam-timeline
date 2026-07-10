@@ -1,0 +1,10 @@
+data/images/
+data/timeline.csv
+data/timeline.html
+data/flights.csv
+data/log.txt
+data/debug_*
+data/*.jpg
+__pycache__/
+scripts/__pycache__/
+*.pyc
