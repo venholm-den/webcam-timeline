@@ -12,6 +12,22 @@ $TimelinePath = "/data/timeline.html"
 
 New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 
+function Exit-IfAnotherLauncherIsRunning {
+    $CurrentPid = $PID
+    $OtherLaunchers = Get-CimInstance Win32_Process |
+        Where-Object {
+            $_.ProcessId -ne $CurrentPid -and
+            $_.Name -like "powershell*" -and
+            $_.CommandLine -like "*start_hosting.ps1*"
+        }
+
+    if ($OtherLaunchers) {
+        $Existing = $OtherLaunchers | Select-Object -First 1
+        Write-Host "Hosting launcher is already running as PID $($Existing.ProcessId). Leaving the existing public link alone."
+        exit 0
+    }
+}
+
 function Find-Cloudflared {
     $Command = Get-Command cloudflared -ErrorAction SilentlyContinue
     if ($Command) {
@@ -65,16 +81,19 @@ function Ensure-HistoryServer {
     return $Server.Id
 }
 
-function Stop-ExistingHistoryTunnels {
-    $Processes = Get-CimInstance Win32_Process |
+function Get-ExistingHistoryTunnel {
+    $Process = Get-CimInstance Win32_Process |
         Where-Object {
             $_.Name -like "cloudflared*" -and
             $_.CommandLine -like "*127.0.0.1:8000*"
-        }
+        } |
+        Select-Object -First 1
 
-    foreach ($Process in $Processes) {
-        Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
+    if (-not $Process) {
+        return $null
     }
+
+    return Get-Process -Id $Process.ProcessId -ErrorAction SilentlyContinue
 }
 
 function Write-PublicUrlFile {
@@ -127,30 +146,69 @@ function Wait-ForTunnelUrl {
     return ""
 }
 
+function Read-KnownTunnelUrl {
+    if (Test-Path $PublicUrlFile) {
+        $Line = Get-Content $PublicUrlFile -ErrorAction SilentlyContinue |
+            Where-Object { $_ -like "tunnel_url=https://*" } |
+            Select-Object -First 1
+        if ($Line) {
+            return $Line.Substring("tunnel_url=".Length)
+        }
+    }
+
+    $Content = ""
+    if (Test-Path $TunnelLog) {
+        $Content += Get-Content $TunnelLog -Raw -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $TunnelErrLog) {
+        $Content += "`n"
+        $Content += Get-Content $TunnelErrLog -Raw -ErrorAction SilentlyContinue
+    }
+
+    $Matches = [regex]::Matches($Content, "https://[a-z0-9-]+\.trycloudflare\.com")
+    if ($Matches.Count -gt 0) {
+        return $Matches[$Matches.Count - 1].Value
+    }
+
+    return ""
+}
+
+Exit-IfAnotherLauncherIsRunning
 $Cloudflared = Find-Cloudflared
 
 while ($true) {
     $ServerPid = Ensure-HistoryServer
-    Stop-ExistingHistoryTunnels
-    Remove-Item $TunnelLog, $TunnelErrLog -ErrorAction SilentlyContinue
+    $Tunnel = Get-ExistingHistoryTunnel
 
-    $Tunnel = Start-Process `
-        -FilePath $Cloudflared `
-        -ArgumentList "tunnel --protocol http2 --edge-ip-version 4 --url $LocalUrl" `
-        -WorkingDirectory $ProjectRoot `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $TunnelLog `
-        -RedirectStandardError $TunnelErrLog `
-        -PassThru
+    if ($Tunnel) {
+        $TunnelUrl = Read-KnownTunnelUrl
+        if (-not $TunnelUrl) {
+            $TunnelUrl = Wait-ForTunnelUrl
+        }
 
-    $TunnelUrl = Wait-ForTunnelUrl
-    if ($TunnelUrl) {
         Write-PublicUrlFile -TunnelUrl $TunnelUrl -ServerPid $ServerPid -TunnelPid $Tunnel.Id -Status "running"
-        Write-Host "Timeline URL: $TunnelUrl$TimelinePath"
-        Write-Host "Wrote: $PublicUrlFile"
+        Write-Host "Reusing existing Cloudflare tunnel PID $($Tunnel.Id)."
     } else {
-        Write-PublicUrlFile -TunnelUrl "" -ServerPid $ServerPid -TunnelPid $Tunnel.Id -Status "starting_or_failed"
-        Write-Host "Tunnel URL was not found yet. Check: $TunnelLog"
+        Remove-Item $TunnelLog, $TunnelErrLog -ErrorAction SilentlyContinue
+
+        $Tunnel = Start-Process `
+            -FilePath $Cloudflared `
+            -ArgumentList "tunnel --protocol http2 --edge-ip-version 4 --url $LocalUrl" `
+            -WorkingDirectory $ProjectRoot `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $TunnelLog `
+            -RedirectStandardError $TunnelErrLog `
+            -PassThru
+
+        $TunnelUrl = Wait-ForTunnelUrl
+        if ($TunnelUrl) {
+            Write-PublicUrlFile -TunnelUrl $TunnelUrl -ServerPid $ServerPid -TunnelPid $Tunnel.Id -Status "running"
+            Write-Host "Timeline URL: $TunnelUrl$TimelinePath"
+            Write-Host "Wrote: $PublicUrlFile"
+        } else {
+            Write-PublicUrlFile -TunnelUrl "" -ServerPid $ServerPid -TunnelPid $Tunnel.Id -Status "starting_or_failed"
+            Write-Host "Tunnel URL was not found yet. Check: $TunnelLog"
+        }
     }
 
     while (-not $Tunnel.HasExited) {

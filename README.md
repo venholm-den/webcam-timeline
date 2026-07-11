@@ -206,6 +206,8 @@ data\public_url.txt
 ```
 
 That file contains a `timeline_url=...` line you can copy and send.
+The URL stays the same while the Cloudflare tunnel process is alive. A new URL
+is only written if the tunnel has to be started again.
 
 Recommended Task Scheduler setup:
 
