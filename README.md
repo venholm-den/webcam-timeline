@@ -52,9 +52,11 @@ does not have an image for that minute, the player carries forward the most
 recent earlier image for that webcam. If there is no earlier image, it shows a
 blank fallback.
 
-The `Aircraft highlight` toggle compares the current image with the previous
-image from the same webcam in the browser and draws boxes around small moving
-objects. It is a local visual aid, not a guaranteed aircraft classifier.
+The `Aircraft highlight` toggle uses the matching flight rows near the selected
+timestamp, then compares the current image with the previous image from the
+same webcam and scores moving objects against the expected aircraft type. It
+labels the best visual match with the callsign/type. It is a local visual aid,
+not a guaranteed aircraft classifier.
 
 ## Flight Info
 

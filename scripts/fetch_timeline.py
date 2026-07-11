@@ -1361,14 +1361,24 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       context.lineWidth = Math.max(2, canvas.width / 420);
       context.strokeStyle = "#fbbf24";
       context.fillStyle = "rgba(251, 191, 36, 0.16)";
+      context.font = `${{Math.max(12, Math.round(canvas.width / 90))}}px Segoe UI, Arial, sans-serif`;
+      context.textBaseline = "top";
 
       candidates.forEach((candidate) => {{
         const x = offsetX + candidate.x * drawnWidth / naturalWidth;
         const y = offsetY + candidate.y * drawnHeight / naturalHeight;
         const width = candidate.width * drawnWidth / naturalWidth;
         const height = candidate.height * drawnHeight / naturalHeight;
+        const label = candidate.label || "Aircraft";
+        const labelWidth = Math.min(context.measureText(label).width + 12, canvas.width - 8);
+        const labelY = Math.max(4, y - 24);
         context.fillRect(x, y, width, height);
         context.strokeRect(x, y, width, height);
+        context.fillStyle = "rgba(5, 7, 12, 0.82)";
+        context.fillRect(x, labelY, labelWidth, 20);
+        context.fillStyle = "#fef3c7";
+        context.fillText(label, x + 6, labelY + 3, labelWidth - 12);
+        context.fillStyle = "rgba(251, 191, 36, 0.16)";
       }});
     }}
 
@@ -1470,9 +1480,104 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
         .slice(0, 6);
     }}
 
+    function matchingFlightsForTimestamp(timestamp) {{
+      const frameTime = parseTimestamp(timestamp);
+      if (!frameTime) return [];
+
+      return flights
+        .map((row) => {{
+          const time = flightTime(row);
+          const diffMinutes = time ? Math.abs(time.getTime() - frameTime.getTime()) / 60000 : Infinity;
+          return {{ row, time, diffMinutes }};
+        }})
+        .filter((item) => item.time && item.diffMinutes <= FLIGHT_WINDOW_MINUTES)
+        .sort((a, b) => a.diffMinutes - b.diffMinutes);
+    }}
+
+    function aircraftProfile(row) {{
+      const text = [
+        row.aircraft_type,
+        row.registration,
+        row.callsign,
+        row.notes,
+      ].filter(Boolean).join(" ").toUpperCase();
+
+      if (/(A109|H135|H145|EC|R44|R66|B06|HELI|ROTOR)/.test(text)) {{
+        return {{ group: "helicopter", aspect: 1.35, minArea: 16, maxArea: 760 }};
+      }}
+
+      if (/(A3|B7|E1|CRJ|EMB|JET|AIRBUS|BOEING)/.test(text)) {{
+        return {{ group: "jet", aspect: 3.1, minArea: 18, maxArea: 980 }};
+      }}
+
+      if (/(PC12|P28|PA28|C17|C15|C172|DA40|SR22|TBM|BE20|BN2|PIPER|CESSNA)/.test(text)) {{
+        return {{ group: "prop", aspect: 2.25, minArea: 8, maxArea: 720 }};
+      }}
+
+      return {{ group: "aircraft", aspect: 2.2, minArea: 8, maxArea: 850 }};
+    }}
+
+    function scoreCandidateForFlight(candidate, flightMatch) {{
+      const row = flightMatch.row;
+      const profile = aircraftProfile(row);
+      const aspect = Math.max(candidate.width, candidate.height) / Math.max(1, Math.min(candidate.width, candidate.height));
+      const area = candidate.width * candidate.height;
+      const expectedArea = Math.max(profile.minArea, Math.min(profile.maxArea, area));
+      const aspectScore = Math.max(0, 1 - Math.abs(aspect - profile.aspect) / Math.max(profile.aspect, 1));
+      const areaScore = area >= profile.minArea && area <= profile.maxArea
+        ? 1
+        : Math.max(0, 1 - Math.abs(area - expectedArea) / Math.max(expectedArea, 1));
+      const timeScore = Math.max(0, 1 - flightMatch.diffMinutes / FLIGHT_WINDOW_MINUTES);
+      const motionScore = Math.min(1, candidate.score / 120);
+
+      return motionScore * 0.42 + aspectScore * 0.28 + areaScore * 0.18 + timeScore * 0.12;
+    }}
+
+    function flightAwareCandidates(candidates, flightMatches) {{
+      const selected = [];
+      const used = new Set();
+
+      flightMatches.slice(0, 4).forEach((flightMatch) => {{
+        let best = null;
+        let bestIndex = -1;
+        let bestScore = -Infinity;
+
+        candidates.forEach((candidate, candidateIndex) => {{
+          if (used.has(candidateIndex)) return;
+          const score = scoreCandidateForFlight(candidate, flightMatch);
+          if (score > bestScore) {{
+            best = candidate;
+            bestIndex = candidateIndex;
+            bestScore = score;
+          }}
+        }});
+
+        if (best && bestScore >= 0.28) {{
+          used.add(bestIndex);
+          selected.push({{
+            ...best,
+            label: [
+              flightLabel(flightMatch.row),
+              flightMatch.row.aircraft_type || aircraftProfile(flightMatch.row).group,
+            ].filter(Boolean).join(" "),
+            matchScore: bestScore,
+          }});
+        }}
+      }});
+
+      return selected.sort((a, b) => b.matchScore - a.matchScore);
+    }}
+
     async function updateAircraftOverlay(elements, frame) {{
       if (!aircraftOverlayToggle.checked || !frame) {{
         clearOverlay(elements.overlay, elements.status);
+        return;
+      }}
+
+      const flightMatches = matchingFlightsForTimestamp(frame.timestamp);
+      if (!flightMatches.length) {{
+        clearOverlay(elements.overlay, elements.status);
+        elements.status.textContent = "No matching flight";
         return;
       }}
 
@@ -1496,10 +1601,11 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
         if (elements.overlay.dataset.analysisToken !== token) return;
 
         const candidates = findMovingCandidates(currentImage, previousImage);
-        drawCandidateBoxes(elements.overlay, elements.image, candidates);
-        elements.status.textContent = candidates.length
-          ? `${{candidates.length}} possible aircraft`
-          : "No motion found";
+        const selected = flightAwareCandidates(candidates, flightMatches);
+        drawCandidateBoxes(elements.overlay, elements.image, selected);
+        elements.status.textContent = selected.length
+          ? `${{selected.length}} flight match`
+          : "Flight nearby, no visual match";
       }} catch (_error) {{
         clearOverlay(elements.overlay, elements.status);
         elements.status.textContent = "Analysis failed";
