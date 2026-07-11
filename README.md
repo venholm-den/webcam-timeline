@@ -58,13 +58,14 @@ same webcam and scores moving objects against the expected aircraft type. It
 labels the best visual match with the callsign/type.
 
 The `Visible aircraft` toggle loads a browser-side COCO-SSD object detector and
-looks for `airplane` objects in the current image, then adds a stricter local
-shape pass for smaller fixed-wing aircraft and helicopters. The current AI
-confidence threshold is `0.28`. If a detection lines up with a projected flight
-row, or there is only one compatible flight near the frame time, the box is
-labelled with the callsign/type. Otherwise it is labelled as possible fixed-wing
-or helicopter. Both toggles are visual aids, not guaranteed aircraft
-classifiers.
+looks for `airplane` objects in the current image. A local shape pass is only
+used when the shape is close to a projected flight position, which keeps random
+buildings, runway markings, and background clutter from being labelled as
+aircraft. The current AI confidence threshold is `0.28`. If a detection lines
+up with a projected flight row, or there is only one compatible flight near the
+frame time, the box is labelled with the callsign/type. Otherwise it is labelled
+as a possible fixed-wing aircraft. Both toggles are visual aids, not guaranteed
+aircraft classifiers.
 
 Labelled crop examples can be stored locally in:
 

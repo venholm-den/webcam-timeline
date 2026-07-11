@@ -1760,6 +1760,33 @@ def write_html(
       return selected.slice(0, 8);
     }}
 
+    function filterShapeCandidatesByFlights(candidates, frame, image) {{
+      const matches = matchingFlightsForTimestamp(frame.timestamp);
+      if (!matches.length) return [];
+
+      const imageWidth = image.naturalWidth || image.width || 1;
+      const imageHeight = image.naturalHeight || image.height || 1;
+
+      return candidates.filter((candidate) => {{
+        const candidateX = (candidate.x + candidate.width / 2) / imageWidth;
+        const candidateY = (candidate.y + candidate.height / 2) / imageHeight;
+
+        return matches.some((match) => {{
+          const profile = aircraftProfile(match.row);
+          if (!profileMatchesCandidate(profile, candidate)) return false;
+
+          const projection = projectedFlightPoint(match.row, frame);
+          if (!projection || !projection.inView) return false;
+
+          const dx = candidateX - projection.xNorm;
+          const dy = candidateY - projection.yNorm;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          const timeScore = Math.max(0, 1 - match.diffMinutes / FLIGHT_WINDOW_MINUTES);
+          return distance <= 0.18 && timeScore >= 0.3;
+        }});
+      }});
+    }}
+
     function labelVisibleCandidate(candidate, frame, image) {{
       const matches = matchingFlightsForTimestamp(frame.timestamp);
       const imageWidth = image.naturalWidth || image.width || 1;
@@ -1820,7 +1847,7 @@ def write_html(
         source = "shape (AI unavailable)";
       }}
 
-      const shapeCandidates = findShapeAircraftCandidates(image);
+      const shapeCandidates = filterShapeCandidatesByFlights(findShapeAircraftCandidates(image), frame, image);
       const merged = mergeVisibleCandidates([...modelCandidates, ...shapeCandidates])
         .map((candidate) => labelVisibleCandidate(candidate, frame, image));
 
