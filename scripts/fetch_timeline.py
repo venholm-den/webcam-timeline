@@ -1463,7 +1463,17 @@ def write_html(
     }}
 
     function webcamPages() {{
-      return Array.from(new Set(frames.map((frame) => frame.pageName))).filter(Boolean).sort();
+      const preferred = ["Webcam 2", "Webcam 1"];
+      const pages = Array.from(new Set(frames.map((frame) => frame.pageName))).filter(Boolean);
+      return pages.sort((a, b) => {{
+        const preferredA = preferred.indexOf(a);
+        const preferredB = preferred.indexOf(b);
+        if (preferredA !== -1 || preferredB !== -1) {{
+          return (preferredA === -1 ? preferred.length : preferredA) -
+            (preferredB === -1 ? preferred.length : preferredB);
+        }}
+        return a.localeCompare(b);
+      }});
     }}
 
     function latestFrameForPageAt(pageName, timestamp, items) {{
