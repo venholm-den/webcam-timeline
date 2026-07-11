@@ -1243,7 +1243,11 @@ def write_html(
       </select>
       <label class="analysis-toggle" title="Highlight likely aircraft by comparing nearby frames">
         <input id="aircraftOverlayToggle" type="checkbox">
-        Aircraft highlight
+        Flight match
+      </label>
+      <label class="analysis-toggle" title="Find visible aircraft shapes in the current image">
+        <input id="visibleAircraftToggle" type="checkbox">
+        Visible aircraft
       </label>
       <span class="counter" id="counter"></span>
     </section>
@@ -1298,6 +1302,7 @@ def write_html(
     const dateFilter = document.getElementById("dateFilter");
     const pageFilter = document.getElementById("pageFilter");
     const aircraftOverlayToggle = document.getElementById("aircraftOverlayToggle");
+    const visibleAircraftToggle = document.getElementById("visibleAircraftToggle");
     const flightList = document.getElementById("flightList");
     const flightWindowLabel = document.getElementById("flightWindowLabel");
     const thumbs = Array.from(document.querySelectorAll(".thumb"));
@@ -1395,12 +1400,14 @@ def write_html(
       const context = canvas.getContext("2d");
       context.clearRect(0, 0, canvas.width, canvas.height);
       context.lineWidth = Math.max(2, canvas.width / 420);
-      context.strokeStyle = "#fbbf24";
-      context.fillStyle = "rgba(251, 191, 36, 0.16)";
       context.font = `${{Math.max(12, Math.round(canvas.width / 90))}}px Segoe UI, Arial, sans-serif`;
       context.textBaseline = "top";
 
       candidates.forEach((candidate) => {{
+        const stroke = candidate.stroke || "#fbbf24";
+        const fill = candidate.fill || "rgba(251, 191, 36, 0.16)";
+        const labelFill = candidate.labelFill || "rgba(5, 7, 12, 0.82)";
+        const labelText = candidate.labelText || "#fef3c7";
         const x = offsetX + candidate.x * drawnWidth / naturalWidth;
         const y = offsetY + candidate.y * drawnHeight / naturalHeight;
         const width = candidate.width * drawnWidth / naturalWidth;
@@ -1408,13 +1415,14 @@ def write_html(
         const label = candidate.label || "Aircraft";
         const labelWidth = Math.min(context.measureText(label).width + 12, canvas.width - 8);
         const labelY = Math.max(4, y - 24);
+        context.strokeStyle = stroke;
+        context.fillStyle = fill;
         context.fillRect(x, y, width, height);
         context.strokeRect(x, y, width, height);
-        context.fillStyle = "rgba(5, 7, 12, 0.82)";
+        context.fillStyle = labelFill;
         context.fillRect(x, labelY, labelWidth, 20);
-        context.fillStyle = "#fef3c7";
+        context.fillStyle = labelText;
         context.fillText(label, x + 6, labelY + 3, labelWidth - 12);
-        context.fillStyle = "rgba(251, 191, 36, 0.16)";
       }});
     }}
 
@@ -1514,6 +1522,130 @@ def write_html(
       return candidates
         .sort((a, b) => b.score - a.score)
         .slice(0, 6);
+    }}
+
+    function findVisibleAircraftCandidates(image) {{
+      const sourceWidth = image.naturalWidth || image.width;
+      const sourceHeight = image.naturalHeight || image.height;
+      const scale = Math.min(1, 420 / sourceWidth);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d", {{ willReadFrequently: true }});
+      context.drawImage(image, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const startY = Math.round(height * 0.16);
+      const endY = Math.round(height * 0.90);
+      const edge = new Uint8Array(width * height);
+
+      for (let y = startY + 1; y < endY - 1; y += 1) {{
+        for (let x = 1; x < width - 1; x += 1) {{
+          const offset = (y * width + x) * 4;
+          const left = (y * width + x - 1) * 4;
+          const right = (y * width + x + 1) * 4;
+          const up = ((y - 1) * width + x) * 4;
+          const down = ((y + 1) * width + x) * 4;
+          const luma = pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114;
+          const gx = Math.abs(
+            (pixels[right] * 0.299 + pixels[right + 1] * 0.587 + pixels[right + 2] * 0.114) -
+            (pixels[left] * 0.299 + pixels[left + 1] * 0.587 + pixels[left + 2] * 0.114)
+          );
+          const gy = Math.abs(
+            (pixels[down] * 0.299 + pixels[down + 1] * 0.587 + pixels[down + 2] * 0.114) -
+            (pixels[up] * 0.299 + pixels[up + 1] * 0.587 + pixels[up + 2] * 0.114)
+          );
+          const colorContrast = Math.abs(pixels[offset] - pixels[offset + 1]) + Math.abs(pixels[offset + 1] - pixels[offset + 2]);
+
+          if (gx + gy > 46 || (gx + gy > 30 && (luma < 80 || luma > 165 || colorContrast > 38))) {{
+            edge[y * width + x] = 1;
+          }}
+        }}
+      }}
+
+      const dilated = new Uint8Array(width * height);
+      for (let y = startY; y < endY; y += 1) {{
+        for (let x = 0; x < width; x += 1) {{
+          if (!edge[y * width + x]) continue;
+          for (let dy = -2; dy <= 2; dy += 1) {{
+            for (let dx = -2; dx <= 2; dx += 1) {{
+              const nx = x + dx;
+              const ny = y + dy;
+              if (nx < 0 || nx >= width || ny < startY || ny >= endY) continue;
+              dilated[ny * width + nx] = 1;
+            }}
+          }}
+        }}
+      }}
+
+      const visited = new Uint8Array(width * height);
+      const queue = [];
+      const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      const candidates = [];
+
+      for (let y = startY; y < endY; y += 1) {{
+        for (let x = 0; x < width; x += 1) {{
+          const index = y * width + x;
+          if (!dilated[index] || visited[index]) continue;
+
+          let minX = x;
+          let maxX = x;
+          let minY = y;
+          let maxY = y;
+          let count = 0;
+          queue.length = 0;
+          queue.push([x, y]);
+          visited[index] = 1;
+
+          while (queue.length) {{
+            const [nextX, nextY] = queue.pop();
+            count += 1;
+            minX = Math.min(minX, nextX);
+            maxX = Math.max(maxX, nextX);
+            minY = Math.min(minY, nextY);
+            maxY = Math.max(maxY, nextY);
+
+            directions.forEach(([dx, dy]) => {{
+              const checkX = nextX + dx;
+              const checkY = nextY + dy;
+              if (checkX < 0 || checkX >= width || checkY < startY || checkY >= endY) return;
+              const checkIndex = checkY * width + checkX;
+              if (!dilated[checkIndex] || visited[checkIndex]) return;
+              visited[checkIndex] = 1;
+              queue.push([checkX, checkY]);
+            }});
+          }}
+
+          const boxWidth = maxX - minX + 1;
+          const boxHeight = maxY - minY + 1;
+          const area = boxWidth * boxHeight;
+          const aspect = Math.max(boxWidth, boxHeight) / Math.max(1, Math.min(boxWidth, boxHeight));
+          const density = count / area;
+
+          if (count < 18 || count > 5200) continue;
+          if (boxWidth < 10 || boxHeight < 6) continue;
+          if (boxWidth > width * 0.46 || boxHeight > height * 0.42) continue;
+          if (aspect < 1.05 || aspect > 8.0) continue;
+          if (density < 0.10) continue;
+
+          candidates.push({{
+            x: Math.max(0, (minX - 5) / scale),
+            y: Math.max(0, (minY - 5) / scale),
+            width: Math.min(sourceWidth, (boxWidth + 10) / scale),
+            height: Math.min(sourceHeight, (boxHeight + 10) / scale),
+            score: count * aspect,
+            label: "Visible aircraft",
+            stroke: "#22d3ee",
+            fill: "rgba(34, 211, 238, 0.14)",
+            labelText: "#cffafe",
+          }});
+        }}
+      }}
+
+      return candidates
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8);
     }}
 
     function matchingFlightsForTimestamp(timestamp) {{
@@ -1746,47 +1878,53 @@ def write_html(
     }}
 
     async function updateAircraftOverlay(elements, frame) {{
-      if (!aircraftOverlayToggle.checked || !frame) {{
+      if ((!aircraftOverlayToggle.checked && !visibleAircraftToggle.checked) || !frame) {{
         clearOverlay(elements.overlay, elements.status);
         return;
       }}
 
-      const flightMatches = matchingFlightsForTimestamp(frame.timestamp);
-      if (!flightMatches.length) {{
-        clearOverlay(elements.overlay, elements.status);
-        elements.status.textContent = "No matching flight";
-        return;
-      }}
-
-      const previous = previousFrameFor(frame);
-      if (!previous) {{
-        clearOverlay(elements.overlay, elements.status);
-        elements.status.textContent = "No earlier frame";
-        return;
-      }}
-
-      const token = `${{frame.sha}}:${{previous.sha}}`;
+      const previous = aircraftOverlayToggle.checked ? previousFrameFor(frame) : null;
+      const token = `${{frame.sha}}:${{previous?.sha || "shape-only"}}:${{aircraftOverlayToggle.checked}}:${{visibleAircraftToggle.checked}}`;
       elements.overlay.dataset.analysisToken = token;
       elements.status.textContent = "Analyzing";
 
       try {{
-        const [currentImage, previousImage] = await Promise.all([
-          loadAnalysisImage(frame.src),
-          loadAnalysisImage(previous.src),
-        ]);
+        const currentImage = await loadAnalysisImage(frame.src);
 
         if (elements.overlay.dataset.analysisToken !== token) return;
 
-        const candidates = findMovingCandidates(currentImage, previousImage);
-        const selected = flightAwareCandidates(candidates, flightMatches, frame, currentImage);
-        const target = flightMatches[0]?.row;
-        const targetLabel = target
-          ? [flightLabel(target), target.aircraft_type || aircraftProfile(target).group].filter(Boolean).join(" ")
-          : "flight";
+        const selected = [];
+        const statusParts = [];
+
+        if (visibleAircraftToggle.checked) {{
+          const visibleCandidates = findVisibleAircraftCandidates(currentImage);
+          selected.push(...visibleCandidates);
+          statusParts.push(`${{visibleCandidates.length}} visible`);
+        }}
+
+        if (aircraftOverlayToggle.checked) {{
+          const flightMatches = matchingFlightsForTimestamp(frame.timestamp);
+
+          if (!flightMatches.length) {{
+            statusParts.push("no matching flight");
+          }} else if (!previous) {{
+            statusParts.push("no earlier frame");
+          }} else {{
+            const previousImage = await loadAnalysisImage(previous.src);
+            if (elements.overlay.dataset.analysisToken !== token) return;
+            const motionCandidates = findMovingCandidates(currentImage, previousImage);
+            const flightCandidates = flightAwareCandidates(motionCandidates, flightMatches, frame, currentImage);
+            selected.push(...flightCandidates);
+            const target = flightMatches[0]?.row;
+            const targetLabel = target
+              ? [flightLabel(target), target.aircraft_type || aircraftProfile(target).group].filter(Boolean).join(" ")
+              : "flight";
+            statusParts.push(flightCandidates.length ? `${{flightCandidates.length}} flight` : `no match for ${{targetLabel}}`);
+          }}
+        }}
+
         drawCandidateBoxes(elements.overlay, elements.image, selected);
-        elements.status.textContent = selected.length
-          ? `${{selected.length}} flight match`
-          : `No visual match for ${{targetLabel}}`;
+        elements.status.textContent = statusParts.join(" | ");
       }} catch (_error) {{
         clearOverlay(elements.overlay, elements.status);
         elements.status.textContent = "Analysis failed";
@@ -2135,16 +2273,21 @@ def write_html(
       window.localStorage.setItem("webcamTimelineAircraftOverlay", aircraftOverlayToggle.checked ? "on" : "off");
       setVisiblePosition(visiblePosition);
     }});
+    visibleAircraftToggle.addEventListener("change", () => {{
+      window.localStorage.setItem("webcamTimelineVisibleAircraftOverlay", visibleAircraftToggle.checked ? "on" : "off");
+      setVisiblePosition(visiblePosition);
+    }});
     themeToggle.addEventListener("click", () => {{
       const nextTheme = document.body.classList.contains("theme-dark") ? "light" : "dark";
       setTheme(nextTheme);
     }});
     window.addEventListener("resize", () => {{
-      if (aircraftOverlayToggle.checked) setVisiblePosition(visiblePosition);
+      if (aircraftOverlayToggle.checked || visibleAircraftToggle.checked) setVisiblePosition(visiblePosition);
     }});
 
     setTheme(window.localStorage.getItem("webcamTimelineTheme") || "light");
     aircraftOverlayToggle.checked = window.localStorage.getItem("webcamTimelineAircraftOverlay") === "on";
+    visibleAircraftToggle.checked = window.localStorage.getItem("webcamTimelineVisibleAircraftOverlay") === "on";
     populateDateFilter();
     populatePageFilter();
     rebuildVisibleIndexes();
