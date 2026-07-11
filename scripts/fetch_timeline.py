@@ -1241,6 +1241,9 @@ def write_html(
       <select class="page-filter" id="pageFilter" aria-label="Filter by webcam">
         <option value="all">All webcams</option>
       </select>
+      <select class="page-filter" id="aircraftFilter" aria-label="Filter by aircraft">
+        <option value="all">All aircraft</option>
+      </select>
       <label class="analysis-toggle" title="Highlight likely aircraft by comparing nearby frames">
         <input id="aircraftOverlayToggle" type="checkbox">
         Flight match
@@ -1304,6 +1307,7 @@ def write_html(
     const speed = document.getElementById("speed");
     const dateFilter = document.getElementById("dateFilter");
     const pageFilter = document.getElementById("pageFilter");
+    const aircraftFilter = document.getElementById("aircraftFilter");
     const aircraftOverlayToggle = document.getElementById("aircraftOverlayToggle");
     const visibleAircraftToggle = document.getElementById("visibleAircraftToggle");
     const flightList = document.getElementById("flightList");
@@ -2156,6 +2160,39 @@ def write_html(
       return row.callsign || row.registration || row.flight || row.hex || "Unknown aircraft";
     }}
 
+    function aircraftFilterKey(row) {{
+      return [
+        row.hex,
+        row.registration,
+        row.callsign,
+        row.flight,
+        row.aircraft_type,
+      ].filter(Boolean).join("|").toUpperCase();
+    }}
+
+    function aircraftFilterLabel(row) {{
+      const label = flightLabel(row);
+      const detail = [row.registration, row.aircraft_type, row.hex ? `ICAO ${{String(row.hex).toUpperCase()}}` : ""]
+        .filter(Boolean)
+        .filter((value, index, values) => values.indexOf(value) === index)
+        .join(" - ");
+      return detail && detail !== label ? `${{label}} - ${{detail}}` : label;
+    }}
+
+    function frameMatchesAircraft(frame, selectedAircraft) {{
+      if (selectedAircraft === "all") return true;
+      const frameTime = parseTimestamp(frame.timestamp);
+      if (!frameTime) return false;
+
+      return flights.some((row) => {{
+        if (aircraftFilterKey(row) !== selectedAircraft) return false;
+        const time = flightTime(row);
+        if (!time) return false;
+        const diffMinutes = Math.abs(time.getTime() - frameTime.getTime()) / 60000;
+        return diffMinutes <= FLIGHT_WINDOW_MINUTES;
+      }});
+    }}
+
     function flightRoute(row) {{
       const origin = row.origin || row.from || "";
       const destination = row.destination || row.to || "";
@@ -2291,13 +2328,39 @@ def write_html(
       }});
     }}
 
+    function populateAircraftFilter() {{
+      const byAircraft = new Map();
+      flights.forEach((row) => {{
+        const key = aircraftFilterKey(row);
+        if (!key || byAircraft.has(key)) return;
+        byAircraft.set(key, aircraftFilterLabel(row));
+      }});
+
+      Array.from(byAircraft.entries())
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .forEach(([key, label]) => {{
+          const option = document.createElement("option");
+          option.value = key;
+          option.textContent = label;
+          aircraftFilter.appendChild(option);
+        }});
+
+      aircraftFilter.disabled = byAircraft.size === 0;
+      if (byAircraft.size === 0) {{
+        aircraftFilter.title = "No flight rows loaded.";
+      }}
+    }}
+
     function rebuildVisibleIndexes() {{
       const selectedDate = dateFilter.value;
       const selectedPage = pageFilter.value;
-      const filtered = frames
+      const selectedAircraft = aircraftFilter.value;
+      const baseFiltered = frames
         .map((frame, frameIndex) => ({{ frame, frameIndex }}))
         .filter((item) => selectedDate === "all" || localDateKey(item.frame.timestamp) === selectedDate)
         .filter((item) => selectedPage === "all" || item.frame.pageName === selectedPage);
+      const filtered = baseFiltered
+        .filter((item) => frameMatchesAircraft(item.frame, selectedAircraft));
 
       if (selectedPage === "all") {{
         const pages = webcamPages();
@@ -2305,7 +2368,7 @@ def write_html(
           .sort()
           .map((key) => {{
             const timestamp = minuteTimestamp(key);
-            const slots = pages.map((pageName) => latestFrameForPageAt(pageName, timestamp, filtered));
+            const slots = pages.map((pageName) => latestFrameForPageAt(pageName, timestamp, baseFiltered));
             const indexes = slots.filter((frameIndex) => frameIndex !== null);
             return {{ timestamp, indexes, slots, pages }};
           }});
@@ -2479,6 +2542,11 @@ def write_html(
       rebuildVisibleIndexes();
       setVisiblePosition(0);
     }});
+    aircraftFilter.addEventListener("change", () => {{
+      stop();
+      rebuildVisibleIndexes();
+      setVisiblePosition(0);
+    }});
     aircraftOverlayToggle.addEventListener("change", () => {{
       window.localStorage.setItem("webcamTimelineAircraftOverlay", aircraftOverlayToggle.checked ? "on" : "off");
       setVisiblePosition(visiblePosition);
@@ -2500,6 +2568,7 @@ def write_html(
     visibleAircraftToggle.checked = window.localStorage.getItem("webcamTimelineVisibleAircraftOverlay") === "on";
     populateDateFilter();
     populatePageFilter();
+    populateAircraftFilter();
     rebuildVisibleIndexes();
     setVisiblePosition(0);
   </script>

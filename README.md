@@ -46,11 +46,12 @@ The timeline page has a large image player, previous/next buttons, play/pause,
 a scrubber, playback speed, a sideways thumbnail timeline, and a dark mode
 toggle. It also has a date filter so playback and scrubbing can be limited to
 one day once the archive spans multiple days, plus a webcam filter for switching
-between Webcam 1 and Webcam 2. When `All webcams` is selected, the player shows
-Webcam 1 and Webcam 2 side by side using synced timeline minutes. If one webcam
-does not have an image for that minute, the player carries forward the most
-recent earlier image for that webcam. If there is no earlier image, it shows a
-blank fallback.
+between Webcam 1 and Webcam 2. The aircraft filter uses loaded `flights.csv`
+rows to show only frames near a selected callsign/registration/type. When `All
+webcams` is selected, the player shows Webcam 1 and Webcam 2 side by side using
+synced timeline minutes. If one webcam does not have an image for that minute,
+the player carries forward the most recent earlier image for that webcam. If
+there is no earlier image, it shows a blank fallback.
 
 The `Flight match` toggle uses the matching flight rows near the selected
 timestamp, then compares the current image with the previous image from the
