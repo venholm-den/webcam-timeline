@@ -74,6 +74,25 @@ data\aircraft_crops
 Use tight crops around the aircraft and names like `GZOFG_P28A_001.jpg`.
 Crop images are ignored by git.
 
+You can also fetch reference images from Wikimedia Commons using the current
+flight log:
+
+```powershell
+python .\scripts\fetch_aircraft_reference_images.py
+```
+
+Or search manually:
+
+```powershell
+python .\scripts\fetch_aircraft_reference_images.py --query "G-ZOFG P28A aircraft"
+```
+
+Downloaded image metadata and source/licence details are written to:
+
+```text
+data\aircraft_crops\references.csv
+```
+
 For better highlighting, add camera position/direction data to:
 
 ```text
