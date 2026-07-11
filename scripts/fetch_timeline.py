@@ -1275,6 +1275,7 @@ def write_html(
     const FLIGHT_WINDOW_MINUTES = 10;
     const TFJS_URL = "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js";
     const COCO_SSD_URL = "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js";
+    const VISIBLE_AIRCRAFT_MIN_SCORE = 0.28;
     const TARGET_ICAO = "{TARGET_ICAO}";
     const stage = document.querySelector(".stage");
     const themeToggle = document.getElementById("themeToggle");
@@ -1415,7 +1416,7 @@ def write_html(
       const predictions = await model.detect(image);
 
       return predictions
-        .filter((prediction) => prediction.class === "airplane" && prediction.score >= 0.50)
+        .filter((prediction) => prediction.class === "airplane" && prediction.score >= VISIBLE_AIRCRAFT_MIN_SCORE)
         .map((prediction) => {{
           const [x, y, width, height] = prediction.bbox;
           return {{
