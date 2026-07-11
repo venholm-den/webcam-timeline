@@ -45,13 +45,15 @@ data\timeline.html
 The timeline page has a large image player, previous/next buttons, play/pause,
 a scrubber, playback speed, a sideways thumbnail timeline, and a dark mode
 toggle. It also has a date filter so playback and scrubbing can be limited to
-one day once the archive spans multiple days, plus a webcam filter for switching
-between Webcam 1 and Webcam 2. The aircraft filter uses loaded `flights.csv`
-rows to show only frames near a selected callsign/registration/type. When `All
-webcams` is selected, the player shows Webcam 1 and Webcam 2 side by side using
-synced timeline minutes. If one webcam does not have an image for that minute,
-the player carries forward the most recent earlier image for that webcam. If
-there is no earlier image, it shows a blank fallback.
+one day once the archive spans multiple days, plus a time jump field for moving
+to the closest frame around a chosen time. The webcam filter switches between
+Webcam 1 and Webcam 2. The aircraft filter uses loaded `flights.csv` rows to
+show only frames near a selected callsign/registration/type, and includes a
+target option for `G-AVFX / 4016D2`. When `All webcams` is selected, the player
+shows Webcam 1 and Webcam 2 side by side using synced timeline minutes. If one
+webcam does not have an image for that minute, the player carries forward the
+most recent earlier image for that webcam. If there is no earlier image, it
+shows a blank fallback.
 
 The `Flight match` toggle uses the matching flight rows near the selected
 timestamp, then compares the current image with the previous image from the
@@ -157,7 +159,8 @@ sources:
 The default search is intentionally tight: within 3 nautical miles of EGPG and
 below 3000 ft. This avoids matching unrelated overhead traffic.
 
-ICAO `4016D2` is highlighted in the flight cards when it appears.
+ICAO `4016D2` / registration `G-AVFX` is highlighted in the flight cards when
+it appears.
 
 Useful options:
 

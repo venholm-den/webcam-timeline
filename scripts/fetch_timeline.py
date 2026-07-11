@@ -31,6 +31,7 @@ EGPG_LON = -3.9755599
 DEFAULT_FLIGHT_RADIUS_NM = 3.0
 DEFAULT_FLIGHT_MAX_ALTITUDE_FT = 3000
 TARGET_ICAO = "4016D2"
+TARGET_REGISTRATION = "G-AVFX"
 CAMERA_NAME_RE = re.compile(r"Cam(\d+)", re.IGNORECASE)
 FLIGHT_COLUMNS = [
     "event_time_utc",
@@ -984,7 +985,7 @@ def write_html(
       padding: 10px;
       box-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
     }}
-    button, select {{
+    button, input, select {{
       font: inherit;
     }}
     .control-button {{
@@ -1026,6 +1027,19 @@ def write_html(
       background: var(--panel);
       color: var(--text);
       padding: 0 8px;
+    }}
+    .time-jump {{
+      height: 38px;
+      min-width: 116px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 8px;
+      color-scheme: light;
+    }}
+    body.theme-dark .time-jump {{
+      color-scheme: dark;
     }}
     .analysis-toggle {{
       height: 38px;
@@ -1174,7 +1188,7 @@ def write_html(
       .controls {{
         grid-template-columns: repeat(3, auto);
       }}
-      .scrubber, .counter, .speed, .date-filter, .page-filter, .analysis-toggle {{
+      .scrubber, .counter, .speed, .date-filter, .page-filter, .time-jump, .analysis-toggle {{
         grid-column: 1 / -1;
       }}
       .details {{
@@ -1238,11 +1252,14 @@ def write_html(
       <select class="date-filter" id="dateFilter" aria-label="Filter by date">
         <option value="all">All dates</option>
       </select>
+      <input class="time-jump" id="timeJump" type="time" step="60" aria-label="Jump to time">
+      <button class="control-button" id="timeJumpButton" type="button" title="Jump to the closest frame time">Go</button>
       <select class="page-filter" id="pageFilter" aria-label="Filter by webcam">
         <option value="all">All webcams</option>
       </select>
       <select class="page-filter" id="aircraftFilter" aria-label="Filter by aircraft">
         <option value="all">All aircraft</option>
+        <option value="target">G-AVFX / 4016D2</option>
       </select>
       <label class="analysis-toggle" title="Highlight likely aircraft by comparing nearby frames">
         <input id="aircraftOverlayToggle" type="checkbox">
@@ -1280,6 +1297,7 @@ def write_html(
     const COCO_SSD_URL = "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js";
     const VISIBLE_AIRCRAFT_MIN_SCORE = 0.28;
     const TARGET_ICAO = "{TARGET_ICAO}";
+    const TARGET_REGISTRATION = "{TARGET_REGISTRATION}";
     const stage = document.querySelector(".stage");
     const themeToggle = document.getElementById("themeToggle");
     const stageViewPrimary = document.getElementById("stageViewPrimary");
@@ -1306,6 +1324,8 @@ def write_html(
     const nextButton = document.getElementById("nextButton");
     const speed = document.getElementById("speed");
     const dateFilter = document.getElementById("dateFilter");
+    const timeJump = document.getElementById("timeJump");
+    const timeJumpButton = document.getElementById("timeJumpButton");
     const pageFilter = document.getElementById("pageFilter");
     const aircraftFilter = document.getElementById("aircraftFilter");
     const aircraftOverlayToggle = document.getElementById("aircraftOverlayToggle");
@@ -1331,6 +1351,20 @@ def write_html(
       const month = String(date.getMonth() + 1).padStart(2, "0");
       const day = String(date.getDate()).padStart(2, "0");
       return `${{year}}-${{month}}-${{day}}`;
+    }}
+
+    function localTimeKey(timestamp) {{
+      const date = new Date(timestamp);
+      if (Number.isNaN(date.getTime())) return "";
+      const hours = String(date.getHours()).padStart(2, "0");
+      const minutes = String(date.getMinutes()).padStart(2, "0");
+      return `${{hours}}:${{minutes}}`;
+    }}
+
+    function localMinutes(timestamp) {{
+      const date = new Date(timestamp);
+      if (Number.isNaN(date.getTime())) return null;
+      return date.getHours() * 60 + date.getMinutes();
     }}
 
     function minuteKey(timestamp) {{
@@ -2170,6 +2204,12 @@ def write_html(
       ].filter(Boolean).join("|").toUpperCase();
     }}
 
+    function isTargetAircraft(row) {{
+      const hex = String(row.hex || "").toUpperCase();
+      const registration = String(row.registration || row.reg || "").toUpperCase();
+      return hex === TARGET_ICAO || registration === TARGET_REGISTRATION;
+    }}
+
     function aircraftFilterLabel(row) {{
       const label = flightLabel(row);
       const detail = [row.registration, row.aircraft_type, row.hex ? `ICAO ${{String(row.hex).toUpperCase()}}` : ""]
@@ -2185,7 +2225,11 @@ def write_html(
       if (!frameTime) return false;
 
       return flights.some((row) => {{
-        if (aircraftFilterKey(row) !== selectedAircraft) return false;
+        if (selectedAircraft === "target") {{
+          if (!isTargetAircraft(row)) return false;
+        }} else if (aircraftFilterKey(row) !== selectedAircraft) {{
+          return false;
+        }}
         const time = flightTime(row);
         if (!time) return false;
         const diffMinutes = Math.abs(time.getTime() - frameTime.getTime()) / 60000;
@@ -2268,7 +2312,7 @@ def write_html(
         const row = item.row;
         const card = document.createElement("article");
         card.className = "flight-card";
-        if (String(row.hex || "").toUpperCase() === TARGET_ICAO) {{
+        if (isTargetAircraft(row)) {{
           card.classList.add("is-target");
         }}
 
@@ -2345,9 +2389,8 @@ def write_html(
           aircraftFilter.appendChild(option);
         }});
 
-      aircraftFilter.disabled = byAircraft.size === 0;
       if (byAircraft.size === 0) {{
-        aircraftFilter.title = "No flight rows loaded.";
+        aircraftFilter.title = "No flight rows loaded yet. The G-AVFX / 4016D2 target option will work once matching rows are captured.";
       }}
     }}
 
@@ -2398,6 +2441,48 @@ def write_html(
       prevButton.disabled = visibleItems.length === 0;
       nextButton.disabled = visibleItems.length === 0;
       playButton.disabled = visibleItems.length === 0;
+    }}
+
+    function jumpToSelectedTime() {{
+      if (!visibleItems.length || !timeJump.value) return;
+      const [hours, minutes] = timeJump.value.split(":").map((value) => Number(value));
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return;
+
+      const currentItem = visibleItems[visiblePosition] || visibleItems[0];
+      const selectedDate = dateFilter.value === "all"
+        ? localDateKey(currentItem.timestamp)
+        : dateFilter.value;
+      const targetMinutes = hours * 60 + minutes;
+      let bestIndex = -1;
+      let bestDelta = Infinity;
+
+      visibleItems.forEach((item, itemIndex) => {{
+        if (selectedDate && localDateKey(item.timestamp) !== selectedDate) return;
+        const itemMinutes = localMinutes(item.timestamp);
+        if (itemMinutes === null) return;
+        const delta = Math.abs(itemMinutes - targetMinutes);
+        if (delta < bestDelta) {{
+          bestDelta = delta;
+          bestIndex = itemIndex;
+        }}
+      }});
+
+      if (bestIndex === -1) {{
+        visibleItems.forEach((item, itemIndex) => {{
+          const itemMinutes = localMinutes(item.timestamp);
+          if (itemMinutes === null) return;
+          const delta = Math.abs(itemMinutes - targetMinutes);
+          if (delta < bestDelta) {{
+            bestDelta = delta;
+            bestIndex = itemIndex;
+          }}
+        }});
+      }}
+
+      if (bestIndex !== -1) {{
+        stop();
+        setVisiblePosition(bestIndex);
+      }}
     }}
 
     function setTheme(theme) {{
@@ -2470,6 +2555,9 @@ def write_html(
         : `server: ${{firstFrame.serverTimestamp}}`;
       stageLink.href = firstFrame?.sourceUrl || "#";
       stageSha.textContent = firstFrame?.sha || "";
+      if (document.activeElement !== timeJump) {{
+        timeJump.value = localTimeKey(isSynced ? item.timestamp : firstFrame.timestamp);
+      }}
       updateFlightsForFrame({{ timestamp: isSynced ? item.timestamp : firstFrame.timestamp }});
       scrubber.value = String(visiblePosition);
       counter.textContent = `${{visiblePosition + 1}} / ${{visibleItems.length}}`;
@@ -2521,6 +2609,12 @@ def write_html(
     scrubber.addEventListener("input", () => {{
       stop();
       setVisiblePosition(Number(scrubber.value));
+    }});
+    timeJumpButton.addEventListener("click", jumpToSelectedTime);
+    timeJump.addEventListener("keydown", (event) => {{
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      jumpToSelectedTime();
     }});
     speed.addEventListener("change", () => {{
       if (timer) play();
