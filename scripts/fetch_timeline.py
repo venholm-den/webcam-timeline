@@ -1425,7 +1425,9 @@ def write_html(
             width,
             height,
             score: prediction.score,
-            label: `AI airplane ${{Math.round(prediction.score * 100)}}%`,
+            source: "AI",
+            classHint: "fixed-wing",
+            label: `Fixed-wing aircraft ${{Math.round(prediction.score * 100)}}%`,
             stroke: "#38bdf8",
             fill: "rgba(56, 189, 248, 0.16)",
             labelText: "#e0f2fe",
@@ -1695,7 +1697,9 @@ def write_html(
             width: Math.min(sourceWidth, (boxWidth + 10) / scale),
             height: Math.min(sourceHeight, (boxHeight + 10) / scale),
             score: count * aspect,
-            label: "Visible aircraft",
+            source: "shape",
+            classHint: aspect < 1.7 ? "helicopter" : "fixed-wing",
+            label: aspect < 1.7 ? "Possible helicopter" : "Possible fixed-wing",
             stroke: "#22d3ee",
             fill: "rgba(34, 211, 238, 0.14)",
             labelText: "#cffafe",
@@ -1706,6 +1710,54 @@ def write_html(
       return candidates
         .sort((a, b) => b.score - a.score)
         .slice(0, 8);
+    }}
+
+    function aircraftKindLabel(kind) {{
+      if (kind === "helicopter") return "Helicopter";
+      if (kind === "fixed-wing") return "Fixed-wing aircraft";
+      if (kind === "jet") return "Jet aircraft";
+      return "Aircraft";
+    }}
+
+    function candidateAircraftKind(candidate) {{
+      if (candidate.classHint) return candidate.classHint;
+      const aspect = Math.max(candidate.width, candidate.height) / Math.max(1, Math.min(candidate.width, candidate.height));
+      if (aspect < 1.65) return "helicopter";
+      return "fixed-wing";
+    }}
+
+    function profileMatchesCandidate(profile, candidate) {{
+      const kind = candidateAircraftKind(candidate);
+      if (profile.group === "aircraft") return true;
+      if (profile.group === "jet") return kind === "fixed-wing" || kind === "jet";
+      return profile.group === kind;
+    }}
+
+    function boxIntersectionRatio(a, b) {{
+      const left = Math.max(a.x, b.x);
+      const top = Math.max(a.y, b.y);
+      const right = Math.min(a.x + a.width, b.x + b.width);
+      const bottom = Math.min(a.y + a.height, b.y + b.height);
+      const width = Math.max(0, right - left);
+      const height = Math.max(0, bottom - top);
+      const intersection = width * height;
+      const smallest = Math.max(1, Math.min(a.width * a.height, b.width * b.height));
+      return intersection / smallest;
+    }}
+
+    function mergeVisibleCandidates(candidates) {{
+      const selected = [];
+      candidates
+        .sort((a, b) => {{
+          const sourceDelta = (a.source === "AI" ? 1 : 0) - (b.source === "AI" ? 1 : 0);
+          if (sourceDelta) return -sourceDelta;
+          return b.score - a.score;
+        }})
+        .forEach((candidate) => {{
+          const overlaps = selected.some((existing) => boxIntersectionRatio(existing, candidate) > 0.55);
+          if (!overlaps) selected.push(candidate);
+        }});
+      return selected.slice(0, 8);
     }}
 
     function labelVisibleCandidate(candidate, frame, image) {{
@@ -1723,6 +1775,8 @@ def write_html(
         const dx = candidateX - projection.xNorm;
         const dy = candidateY - projection.yNorm;
         const distance = Math.sqrt(dx * dx + dy * dy);
+        const profile = aircraftProfile(match.row);
+        if (!profileMatchesCandidate(profile, candidate)) return;
         const score = Math.max(0, 1 - distance * 5) * Math.max(0, 1 - match.diffMinutes / FLIGHT_WINDOW_MINUTES);
 
         if (!best || score > best.score) {{
@@ -1738,25 +1792,41 @@ def write_html(
         }};
       }}
 
-      return candidate;
-    }}
-
-    async function findVisibleAircraftCandidates(image, frame) {{
-      try {{
-        const modelCandidates = await findModelAircraftCandidates(image);
-        if (modelCandidates.length) {{
+      if (matches.length === 1) {{
+        const row = matches[0].row;
+        const profile = aircraftProfile(row);
+        if (profileMatchesCandidate(profile, candidate)) {{
           return {{
-            candidates: modelCandidates.map((candidate) => labelVisibleCandidate(candidate, frame, image)),
-            source: "AI",
+            ...candidate,
+            label: `Possible ${{[flightLabel(row), row.aircraft_type || profile.group].filter(Boolean).join(" ")}}`,
           }};
         }}
-      }} catch (_error) {{
-        return {{ candidates: [], source: "AI unavailable" }};
       }}
 
       return {{
-        candidates: [],
-        source: "AI",
+        ...candidate,
+        label: candidate.label || aircraftKindLabel(candidateAircraftKind(candidate)),
+      }};
+    }}
+
+    async function findVisibleAircraftCandidates(image, frame) {{
+      let modelCandidates = [];
+      let source = "shape";
+
+      try {{
+        modelCandidates = await findModelAircraftCandidates(image);
+        source = modelCandidates.length ? "AI+shape" : "shape";
+      }} catch (_error) {{
+        source = "shape (AI unavailable)";
+      }}
+
+      const shapeCandidates = findShapeAircraftCandidates(image);
+      const merged = mergeVisibleCandidates([...modelCandidates, ...shapeCandidates])
+        .map((candidate) => labelVisibleCandidate(candidate, frame, image));
+
+      return {{
+        candidates: merged,
+        source,
       }};
     }}
 
