@@ -52,6 +52,10 @@ does not have an image for that minute, the player carries forward the most
 recent earlier image for that webcam. If there is no earlier image, it shows a
 blank fallback.
 
+The `Aircraft highlight` toggle compares the current image with the previous
+image from the same webcam in the browser and draws boxes around small moving
+objects. It is a local visual aid, not a guaranteed aircraft classifier.
+
 ## Flight Info
 
 The timeline page reads optional flight rows from:
@@ -72,7 +76,7 @@ minutes of the image timeline timestamp.
 Expected columns:
 
 ```text
-event_time_utc,callsign,registration,aircraft_type,origin,destination,direction,altitude_ft,notes,source_url
+event_time_utc,callsign,registration,aircraft_type,origin,destination,direction,altitude_ft,groundspeed_kt,vertical_rate_fpm,track_deg,squawk,emergency,seen_seconds,on_ground,notes,source_url,hex,latitude,longitude,distance_nm,provider
 ```
 
 Only `event_time_utc` is required. The other columns make the flight card more

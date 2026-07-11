@@ -1,1 +1,1 @@
-event_time_utc,callsign,registration,aircraft_type,origin,destination,direction,altitude_ft,notes,source_url,hex,latitude,longitude,distance_nm,provider
+event_time_utc,callsign,registration,aircraft_type,origin,destination,direction,altitude_ft,groundspeed_kt,vertical_rate_fpm,track_deg,squawk,emergency,seen_seconds,on_ground,notes,source_url,hex,latitude,longitude,distance_nm,provider

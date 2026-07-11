@@ -41,6 +41,13 @@ FLIGHT_COLUMNS = [
     "destination",
     "direction",
     "altitude_ft",
+    "groundspeed_kt",
+    "vertical_rate_fpm",
+    "track_deg",
+    "squawk",
+    "emergency",
+    "seen_seconds",
+    "on_ground",
     "notes",
     "source_url",
     "hex",
@@ -151,8 +158,36 @@ def read_flights(csv_path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def normalize_flight_row(row: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(row)
+    notes = str(normalized.get("notes", ""))
+
+    if not normalized.get("track_deg"):
+        normalized["track_deg"] = normalized.get("direction", "")
+
+    if not normalized.get("groundspeed_kt"):
+        speed_match = re.search(r"groundspeed=([0-9.]+)", notes)
+        if speed_match:
+            normalized["groundspeed_kt"] = speed_match.group(1)
+        else:
+            velocity_match = re.search(r"velocity_mps=([0-9.]+)", notes)
+            if velocity_match:
+                normalized["groundspeed_kt"] = f"{float(velocity_match.group(1)) * 1.94384:.1f}"
+
+    if not normalized.get("vertical_rate_fpm"):
+        vertical_match = re.search(r"vertical_rate_mps=([-0-9.]+)", notes)
+        if vertical_match:
+            normalized["vertical_rate_fpm"] = f"{float(vertical_match.group(1)) * 196.850394:.0f}"
+
+    if not normalized.get("on_ground"):
+        normalized["on_ground"] = "true" if str(normalized.get("altitude_ft", "")).lower() == "ground" else "false"
+
+    return normalized
+
+
 def write_flights(csv_path: Path, rows: list[dict[str, Any]]) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [normalize_flight_row(row) for row in rows]
     rows = sorted(rows, key=lambda row: str(row.get("event_time_utc", "")), reverse=True)
 
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -262,6 +297,7 @@ def fetch_adsb_lol_flights(lat: float, lon: float, radius_nm: float, max_altitud
         altitude = aircraft.get("alt_baro", aircraft.get("alt_geom", ""))
         altitude_ft = "" if altitude == "ground" else str(altitude or "")
         distance_nm = haversine_nm(lat, lon, float(aircraft_lat), float(aircraft_lon))
+        vertical_rate = aircraft.get("baro_rate", aircraft.get("geom_rate", ""))
         row = (
             {
                 "event_time_utc": event_time.isoformat(timespec="seconds"),
@@ -272,6 +308,13 @@ def fetch_adsb_lol_flights(lat: float, lon: float, radius_nm: float, max_altitud
                 "destination": "",
                 "direction": str(aircraft.get("track", "")),
                 "altitude_ft": altitude_ft,
+                "groundspeed_kt": str(aircraft.get("gs", "")),
+                "vertical_rate_fpm": str(vertical_rate or ""),
+                "track_deg": str(aircraft.get("track", "")),
+                "squawk": str(aircraft.get("squawk", "")),
+                "emergency": str(aircraft.get("emergency", "")),
+                "seen_seconds": str(aircraft.get("seen", "")),
+                "on_ground": "true" if altitude == "ground" else "false",
                 "notes": f"ADSB.lol live snapshot; groundspeed={aircraft.get('gs', '')}",
                 "source_url": "https://globe.adsb.lol/",
                 "hex": str(aircraft.get("hex", "")).strip(),
@@ -315,6 +358,14 @@ def fetch_opensky_flights(lat: float, lon: float, radius_nm: float, max_altitude
         elif state[7] is not None:
             altitude_ft = str(round(float(state[7]) * 3.28084))
 
+        groundspeed = ""
+        if state[9] is not None:
+            groundspeed = f"{float(state[9]) * 1.94384:.1f}"
+
+        vertical_rate = ""
+        if state[11] is not None:
+            vertical_rate = f"{float(state[11]) * 196.850394:.0f}"
+
         row = (
             {
                 "event_time_utc": iso_from_unix(state[4] or data.get("time")),
@@ -325,6 +376,13 @@ def fetch_opensky_flights(lat: float, lon: float, radius_nm: float, max_altitude
                 "destination": "",
                 "direction": str(state[10] or ""),
                 "altitude_ft": altitude_ft,
+                "groundspeed_kt": groundspeed,
+                "vertical_rate_fpm": vertical_rate,
+                "track_deg": str(state[10] or ""),
+                "squawk": str(state[14] or "") if len(state) > 14 else "",
+                "emergency": "",
+                "seen_seconds": "",
+                "on_ground": "true" if state[8] else "false",
                 "notes": f"OpenSky live snapshot; velocity_mps={state[9] or ''}; vertical_rate_mps={state[11] or ''}",
                 "source_url": "https://opensky-network.org/",
                 "hex": str(state[0] or "").strip(),
@@ -802,6 +860,27 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       object-fit: contain;
       background: var(--stage);
     }}
+    .plane-overlay {{
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }}
+    .analysis-status {{
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      border-radius: 999px;
+      background: rgba(5, 7, 12, 0.72);
+      color: #eef3f8;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .analysis-status:empty {{
+      display: none;
+    }}
     .stage-label {{
       position: absolute;
       left: 10px;
@@ -860,7 +939,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       top: 10px;
       z-index: 5;
       display: grid;
-      grid-template-columns: auto auto auto 1fr auto auto auto;
+      grid-template-columns: auto auto auto 1fr repeat(5, auto);
       gap: 10px;
       align-items: center;
       background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -912,6 +991,23 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       background: var(--panel);
       color: var(--text);
       padding: 0 8px;
+    }}
+    .analysis-toggle {{
+      height: 38px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 10px;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 700;
+    }}
+    .analysis-toggle input {{
+      accent-color: var(--accent);
     }}
     .flight-panel {{
       display: grid;
@@ -1043,7 +1139,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       .controls {{
         grid-template-columns: repeat(3, auto);
       }}
-      .scrubber, .counter, .speed, .date-filter, .page-filter {{
+      .scrubber, .counter, .speed, .date-filter, .page-filter, .analysis-toggle {{
         grid-column: 1 / -1;
       }}
       .details {{
@@ -1068,13 +1164,17 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       <div class="stage-images">
         <div class="stage-view" id="stageViewPrimary">
           <img id="stageImage" alt="">
+          <canvas class="plane-overlay" id="planeOverlayPrimary"></canvas>
           <span class="stage-empty" id="stageEmptyPrimary">No image yet</span>
           <span class="stage-label" id="stageLabelPrimary"></span>
+          <span class="analysis-status" id="analysisStatusPrimary"></span>
         </div>
         <div class="stage-view" id="stageViewSecondary" hidden>
           <img id="stageImageSecondary" alt="">
+          <canvas class="plane-overlay" id="planeOverlaySecondary"></canvas>
           <span class="stage-empty" id="stageEmptySecondary">No image yet</span>
           <span class="stage-label" id="stageLabelSecondary"></span>
+          <span class="analysis-status" id="analysisStatusSecondary"></span>
         </div>
       </div>
       <div class="details">
@@ -1106,6 +1206,10 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       <select class="page-filter" id="pageFilter" aria-label="Filter by webcam">
         <option value="all">All webcams</option>
       </select>
+      <label class="analysis-toggle" title="Highlight likely aircraft by comparing nearby frames">
+        <input id="aircraftOverlayToggle" type="checkbox">
+        Aircraft highlight
+      </label>
       <span class="counter" id="counter"></span>
     </section>
     <section class="flight-panel" aria-label="Flight information">
@@ -1136,6 +1240,10 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
     const stageViewSecondary = document.getElementById("stageViewSecondary");
     const stageImage = document.getElementById("stageImage");
     const stageImageSecondary = document.getElementById("stageImageSecondary");
+    const planeOverlayPrimary = document.getElementById("planeOverlayPrimary");
+    const planeOverlaySecondary = document.getElementById("planeOverlaySecondary");
+    const analysisStatusPrimary = document.getElementById("analysisStatusPrimary");
+    const analysisStatusSecondary = document.getElementById("analysisStatusSecondary");
     const stageEmptyPrimary = document.getElementById("stageEmptyPrimary");
     const stageEmptySecondary = document.getElementById("stageEmptySecondary");
     const stageLabelPrimary = document.getElementById("stageLabelPrimary");
@@ -1153,6 +1261,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
     const speed = document.getElementById("speed");
     const dateFilter = document.getElementById("dateFilter");
     const pageFilter = document.getElementById("pageFilter");
+    const aircraftOverlayToggle = document.getElementById("aircraftOverlayToggle");
     const flightList = document.getElementById("flightList");
     const flightWindowLabel = document.getElementById("flightWindowLabel");
     const thumbs = Array.from(document.querySelectorAll(".thumb"));
@@ -1199,6 +1308,204 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       return latest;
     }}
 
+    function previousFrameFor(frame) {{
+      if (!frame) return null;
+      let previous = null;
+      frames.forEach((candidate) => {{
+        if (candidate.pageName !== frame.pageName) return;
+        if (candidate.timestamp >= frame.timestamp) return;
+        if (!previous || candidate.timestamp > previous.timestamp) previous = candidate;
+      }});
+      return previous;
+    }}
+
+    function clearOverlay(canvas, status) {{
+      const context = canvas.getContext("2d");
+      context.clearRect(0, 0, canvas.width || 1, canvas.height || 1);
+      status.textContent = "";
+    }}
+
+    function loadAnalysisImage(src) {{
+      return new Promise((resolve, reject) => {{
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = src;
+      }});
+    }}
+
+    function drawCandidateBoxes(canvas, imageElement, candidates) {{
+      const naturalWidth = imageElement.naturalWidth || imageElement.width || 1;
+      const naturalHeight = imageElement.naturalHeight || imageElement.height || 1;
+      const displayRect = imageElement.getBoundingClientRect();
+      const parentRect = imageElement.parentElement.getBoundingClientRect();
+      const imageAspect = naturalWidth / naturalHeight;
+      const boxAspect = displayRect.width / displayRect.height;
+      let drawnWidth = displayRect.width;
+      let drawnHeight = displayRect.height;
+      let offsetX = displayRect.left - parentRect.left;
+      let offsetY = displayRect.top - parentRect.top;
+
+      if (boxAspect > imageAspect) {{
+        drawnWidth = displayRect.height * imageAspect;
+        offsetX += (displayRect.width - drawnWidth) / 2;
+      }} else {{
+        drawnHeight = displayRect.width / imageAspect;
+        offsetY += (displayRect.height - drawnHeight) / 2;
+      }}
+
+      canvas.width = Math.max(1, Math.round(parentRect.width));
+      canvas.height = Math.max(1, Math.round(parentRect.height));
+      const context = canvas.getContext("2d");
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.lineWidth = Math.max(2, canvas.width / 420);
+      context.strokeStyle = "#fbbf24";
+      context.fillStyle = "rgba(251, 191, 36, 0.16)";
+
+      candidates.forEach((candidate) => {{
+        const x = offsetX + candidate.x * drawnWidth / naturalWidth;
+        const y = offsetY + candidate.y * drawnHeight / naturalHeight;
+        const width = candidate.width * drawnWidth / naturalWidth;
+        const height = candidate.height * drawnHeight / naturalHeight;
+        context.fillRect(x, y, width, height);
+        context.strokeRect(x, y, width, height);
+      }});
+    }}
+
+    function findMovingCandidates(currentImage, previousImage) {{
+      const sourceWidth = currentImage.naturalWidth || currentImage.width;
+      const sourceHeight = currentImage.naturalHeight || currentImage.height;
+      const scale = Math.min(1, 360 / sourceWidth);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d", {{ willReadFrequently: true }});
+
+      context.drawImage(currentImage, 0, 0, width, height);
+      const current = context.getImageData(0, 0, width, height).data;
+      context.clearRect(0, 0, width, height);
+      context.drawImage(previousImage, 0, 0, width, height);
+      const previous = context.getImageData(0, 0, width, height).data;
+
+      const startY = Math.round(height * 0.06);
+      const endY = Math.round(height * 0.84);
+      const changed = new Uint8Array(width * height);
+
+      for (let y = startY; y < endY; y += 1) {{
+        for (let x = 0; x < width; x += 1) {{
+          const offset = (y * width + x) * 4;
+          const currentLuma = current[offset] * 0.299 + current[offset + 1] * 0.587 + current[offset + 2] * 0.114;
+          const previousLuma = previous[offset] * 0.299 + previous[offset + 1] * 0.587 + previous[offset + 2] * 0.114;
+          const diff = Math.abs(currentLuma - previousLuma);
+          const localContrast = Math.abs(current[offset] - current[offset + 1]) + Math.abs(current[offset + 1] - current[offset + 2]);
+
+          if (diff > 34 || (diff > 24 && localContrast > 35)) {{
+            changed[y * width + x] = 1;
+          }}
+        }}
+      }}
+
+      const visited = new Uint8Array(width * height);
+      const candidates = [];
+      const queue = [];
+      const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+      for (let y = startY; y < endY; y += 1) {{
+        for (let x = 0; x < width; x += 1) {{
+          const index = y * width + x;
+          if (!changed[index] || visited[index]) continue;
+
+          let minX = x;
+          let maxX = x;
+          let minY = y;
+          let maxY = y;
+          let count = 0;
+          queue.length = 0;
+          queue.push([x, y]);
+          visited[index] = 1;
+
+          while (queue.length) {{
+            const [nextX, nextY] = queue.pop();
+            count += 1;
+            minX = Math.min(minX, nextX);
+            maxX = Math.max(maxX, nextX);
+            minY = Math.min(minY, nextY);
+            maxY = Math.max(maxY, nextY);
+
+            directions.forEach(([dx, dy]) => {{
+              const checkX = nextX + dx;
+              const checkY = nextY + dy;
+              if (checkX < 0 || checkX >= width || checkY < startY || checkY >= endY) return;
+              const checkIndex = checkY * width + checkX;
+              if (!changed[checkIndex] || visited[checkIndex]) return;
+              visited[checkIndex] = 1;
+              queue.push([checkX, checkY]);
+            }});
+          }}
+
+          const boxWidth = maxX - minX + 1;
+          const boxHeight = maxY - minY + 1;
+          const area = boxWidth * boxHeight;
+          const density = count / area;
+
+          if (count < 3 || count > 650) continue;
+          if (boxWidth > width * 0.24 || boxHeight > height * 0.24) continue;
+          if (density < 0.08) continue;
+
+          const pad = Math.max(6, Math.round(Math.max(boxWidth, boxHeight) * 1.4));
+          candidates.push({{
+            x: Math.max(0, (minX - pad) / scale),
+            y: Math.max(0, (minY - pad) / scale),
+            width: Math.min(sourceWidth, (boxWidth + pad * 2) / scale),
+            height: Math.min(sourceHeight, (boxHeight + pad * 2) / scale),
+            score: count,
+          }});
+        }}
+      }}
+
+      return candidates
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 6);
+    }}
+
+    async function updateAircraftOverlay(elements, frame) {{
+      if (!aircraftOverlayToggle.checked || !frame) {{
+        clearOverlay(elements.overlay, elements.status);
+        return;
+      }}
+
+      const previous = previousFrameFor(frame);
+      if (!previous) {{
+        clearOverlay(elements.overlay, elements.status);
+        elements.status.textContent = "No earlier frame";
+        return;
+      }}
+
+      const token = `${{frame.sha}}:${{previous.sha}}`;
+      elements.overlay.dataset.analysisToken = token;
+      elements.status.textContent = "Analyzing";
+
+      try {{
+        const [currentImage, previousImage] = await Promise.all([
+          loadAnalysisImage(frame.src),
+          loadAnalysisImage(previous.src),
+        ]);
+
+        if (elements.overlay.dataset.analysisToken !== token) return;
+
+        const candidates = findMovingCandidates(currentImage, previousImage);
+        drawCandidateBoxes(elements.overlay, elements.image, candidates);
+        elements.status.textContent = candidates.length
+          ? `${{candidates.length}} possible aircraft`
+          : "No motion found";
+      }} catch (_error) {{
+        clearOverlay(elements.overlay, elements.status);
+        elements.status.textContent = "Analysis failed";
+      }}
+    }}
+
     function parseTimestamp(timestamp) {{
       if (!timestamp) return null;
       const value = timestamp.endsWith("Z") || timestamp.includes("+") ? timestamp : `${{timestamp}}Z`;
@@ -1223,6 +1530,34 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       if (destination) return `to ${{destination}}`;
 
       return row.direction || row.notes || "No route details";
+    }}
+
+    function formatFlightNumber(value, suffix, decimals = 0) {{
+      if (value === null || value === undefined || value === "") return "";
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "";
+      return `${{numeric.toFixed(decimals)}} ${{suffix}}`;
+    }}
+
+    function flightDetailChips(row) {{
+      const chips = [];
+      const altitude = String(row.altitude_ft || "").toLowerCase() === "ground"
+        ? "ground"
+        : formatFlightNumber(row.altitude_ft, "ft");
+      const speed = formatFlightNumber(row.groundspeed_kt, "kt", 1);
+      const track = formatFlightNumber(row.track_deg || row.direction, "deg", 0);
+      const verticalRate = formatFlightNumber(row.vertical_rate_fpm, "fpm", 0);
+      const distance = formatFlightNumber(row.distance_nm, "nm", 2);
+
+      if (altitude) chips.push(`alt ${{altitude}}`);
+      if (speed) chips.push(`speed ${{speed}}`);
+      if (track) chips.push(`track ${{track}}`);
+      if (verticalRate) chips.push(`vertical ${{verticalRate}}`);
+      if (distance) chips.push(`${{distance}} from EGPG`);
+      if (row.squawk) chips.push(`squawk ${{row.squawk}}`);
+      if (row.provider) chips.push(row.provider);
+
+      return chips;
     }}
 
     function updateFlightsForFrame(frame) {{
@@ -1274,8 +1609,14 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
         const meta = document.createElement("span");
         const aircraft = row.aircraft_type || row.type || row.registration || "";
         const icao = row.hex ? `ICAO ${{String(row.hex).toUpperCase()}}` : "";
-        meta.textContent = [icao, aircraft, flightRoute(row)].filter(Boolean).join(" - ");
+        const route = flightRoute(row);
+        meta.textContent = [icao, aircraft, route].filter(Boolean).join(" - ");
+        const chips = document.createElement("span");
+        chips.textContent = flightDetailChips(row).join(" | ");
         detailCell.append(title, document.createElement("br"), meta);
+        if (chips.textContent) {{
+          detailCell.append(document.createElement("br"), chips);
+        }}
 
         const delta = document.createElement("span");
         delta.textContent = `${{item.diffMinutes.toFixed(1)}} min`;
@@ -1377,9 +1718,11 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       if (frame) {{
         elements.image.src = frame.src;
         elements.image.alt = frame.sourceName;
+        updateAircraftOverlay(elements, frame);
       }} else {{
         elements.image.removeAttribute("src");
         elements.image.alt = "";
+        clearOverlay(elements.overlay, elements.status);
       }}
 
       return frame;
@@ -1399,15 +1742,22 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       const primaryFrame = renderStageSlot(item.slots[0], {{
         view: stageViewPrimary,
         image: stageImage,
+        overlay: planeOverlayPrimary,
+        status: analysisStatusPrimary,
         empty: stageEmptyPrimary,
         label: stageLabelPrimary,
       }}, pages[0] || "Webcam 1");
       const secondaryFrame = isSynced ? renderStageSlot(item.slots[1], {{
         view: stageViewSecondary,
         image: stageImageSecondary,
+        overlay: planeOverlaySecondary,
+        status: analysisStatusSecondary,
         empty: stageEmptySecondary,
         label: stageLabelSecondary,
       }}, pages[1] || "Webcam 2") : null;
+      if (!isSynced) {{
+        clearOverlay(planeOverlaySecondary, analysisStatusSecondary);
+      }}
       const firstFrame = primaryFrame || secondaryFrame;
 
       stage.classList.toggle("side-by-side", isSynced);
@@ -1494,12 +1844,20 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       rebuildVisibleIndexes();
       setVisiblePosition(0);
     }});
+    aircraftOverlayToggle.addEventListener("change", () => {{
+      window.localStorage.setItem("webcamTimelineAircraftOverlay", aircraftOverlayToggle.checked ? "on" : "off");
+      setVisiblePosition(visiblePosition);
+    }});
     themeToggle.addEventListener("click", () => {{
       const nextTheme = document.body.classList.contains("theme-dark") ? "light" : "dark";
       setTheme(nextTheme);
     }});
+    window.addEventListener("resize", () => {{
+      if (aircraftOverlayToggle.checked) setVisiblePosition(visiblePosition);
+    }});
 
     setTheme(window.localStorage.getItem("webcamTimelineTheme") || "light");
+    aircraftOverlayToggle.checked = window.localStorage.getItem("webcamTimelineAircraftOverlay") === "on";
     populateDateFilter();
     populatePageFilter();
     rebuildVisibleIndexes();
