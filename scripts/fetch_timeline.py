@@ -1624,18 +1624,18 @@ def write_html(
       ].filter(Boolean).join(" ").toUpperCase();
 
       if (/(A109|H135|H145|EC|R44|R66|B06|HELI|ROTOR)/.test(text)) {{
-        return {{ group: "helicopter", aspect: 1.35, minArea: 16, maxArea: 760 }};
+        return {{ group: "helicopter", aspect: 1.35, minAspect: 0.9, maxAspect: 2.4, minArea: 16, maxArea: 760 }};
       }}
 
       if (/(A3|B7|E1|CRJ|EMB|JET|AIRBUS|BOEING)/.test(text)) {{
-        return {{ group: "jet", aspect: 3.1, minArea: 18, maxArea: 980 }};
+        return {{ group: "jet", aspect: 3.1, minAspect: 1.8, maxAspect: 7.5, minArea: 18, maxArea: 980 }};
       }}
 
       if (/(PC12|P28|PA28|C17|C15|C172|DA40|SR22|TBM|BE20|BN2|PIPER|CESSNA)/.test(text)) {{
-        return {{ group: "prop", aspect: 2.25, minArea: 8, maxArea: 720 }};
+        return {{ group: "fixed-wing", aspect: 2.35, minAspect: 1.65, maxAspect: 6.5, minArea: 8, maxArea: 720 }};
       }}
 
-      return {{ group: "aircraft", aspect: 2.2, minArea: 8, maxArea: 850 }};
+      return {{ group: "aircraft", aspect: 2.2, minAspect: 1.1, maxAspect: 7.0, minArea: 8, maxArea: 850 }};
     }}
 
     function scoreCandidateForFlight(candidate, flightMatch, frame, image) {{
@@ -1648,12 +1648,18 @@ def write_html(
       const areaScore = area >= profile.minArea && area <= profile.maxArea
         ? 1
         : Math.max(0, 1 - Math.abs(area - expectedArea) / Math.max(expectedArea, 1));
+      const typeShapeScore = aspect >= profile.minAspect && aspect <= profile.maxAspect ? 1 : 0;
+
+      if (!typeShapeScore && profile.group !== "aircraft") {{
+        return -Infinity;
+      }}
+
       const timeScore = Math.max(0, 1 - flightMatch.diffMinutes / FLIGHT_WINDOW_MINUTES);
       const motionScore = Math.min(1, candidate.score / 120);
       const projection = projectedFlightPoint(row, frame);
 
       if (!projection) {{
-        return motionScore * 0.42 + aspectScore * 0.28 + areaScore * 0.18 + timeScore * 0.12;
+        return motionScore * 0.34 + aspectScore * 0.24 + areaScore * 0.16 + timeScore * 0.10 + typeShapeScore * 0.16;
       }}
 
       const imageWidth = image.naturalWidth || image.width || 1;
@@ -1667,10 +1673,11 @@ def write_html(
       const viewScore = projection.inView ? 1 : 0.25;
 
       return motionScore * 0.26 +
-        aspectScore * 0.18 +
+        aspectScore * 0.14 +
         areaScore * 0.12 +
         timeScore * 0.12 +
         positionScore * 0.28 +
+        typeShapeScore * 0.12 +
         viewScore * 0.04;
     }}
 
@@ -1743,10 +1750,14 @@ def write_html(
 
         const candidates = findMovingCandidates(currentImage, previousImage);
         const selected = flightAwareCandidates(candidates, flightMatches, frame, currentImage);
+        const target = flightMatches[0]?.row;
+        const targetLabel = target
+          ? [flightLabel(target), target.aircraft_type || aircraftProfile(target).group].filter(Boolean).join(" ")
+          : "flight";
         drawCandidateBoxes(elements.overlay, elements.image, selected);
         elements.status.textContent = selected.length
           ? `${{selected.length}} flight match`
-          : "Flight nearby, no visual match";
+          : `No visual match for ${{targetLabel}}`;
       }} catch (_error) {{
         clearOverlay(elements.overlay, elements.status);
         elements.status.textContent = "Analysis failed";
