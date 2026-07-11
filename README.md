@@ -65,6 +65,15 @@ a projected flight row, the box is labelled with the callsign/type. If the model
 cannot confidently identify an aircraft, the page does not draw a fallback shape
 box. Both toggles are visual aids, not guaranteed aircraft classifiers.
 
+Labelled crop examples can be stored locally in:
+
+```text
+data\aircraft_crops
+```
+
+Use tight crops around the aircraft and names like `GZOFG_P28A_001.jpg`.
+Crop images are ignored by git.
+
 For better highlighting, add camera position/direction data to:
 
 ```text

@@ -3,6 +3,9 @@ data/timeline.csv
 data/timeline.html
 data/flights.csv
 data/cameras.csv
+data/aircraft_crops/*
+!data/aircraft_crops/.gitkeep
+!data/aircraft_crops/README.md
 data/log.txt
 data/server.log
 data/server.err.log
