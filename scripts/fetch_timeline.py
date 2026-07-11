@@ -1615,6 +1615,27 @@ def write_html(
       }};
     }}
 
+    function projectedCandidateForFlight(flightMatch, frame, image) {{
+      const projection = projectedFlightPoint(flightMatch.row, frame);
+      if (!projection || !projection.inView) return null;
+
+      const imageWidth = image.naturalWidth || image.width || 1;
+      const imageHeight = image.naturalHeight || image.height || 1;
+      const profile = aircraftProfile(flightMatch.row);
+      const width = profile.group === "helicopter" ? 58 : 76;
+      const height = profile.group === "helicopter" ? 46 : 34;
+
+      return {{
+        x: Math.max(0, Math.min(imageWidth - width, projection.xNorm * imageWidth - width / 2)),
+        y: Math.max(0, Math.min(imageHeight - height, projection.yNorm * imageHeight - height / 2)),
+        width,
+        height,
+        score: 0,
+        matchScore: 0,
+        label: `Expected ${{[flightLabel(flightMatch.row), flightMatch.row.aircraft_type || profile.group].filter(Boolean).join(" ")}}`,
+      }};
+    }}
+
     function aircraftProfile(row) {{
       const text = [
         row.aircraft_type,
@@ -1669,6 +1690,11 @@ def write_html(
       const dx = candidateX - projection.xNorm;
       const dy = candidateY - projection.yNorm;
       const projectionDistance = Math.sqrt(dx * dx + dy * dy);
+
+      if (projection.inView && projectionDistance > 0.24) {{
+        return -Infinity;
+      }}
+
       const positionScore = Math.max(0, 1 - projectionDistance * 3.0);
       const viewScore = projection.inView ? 1 : 0.25;
 
@@ -1710,6 +1736,9 @@ def write_html(
             ].filter(Boolean).join(" "),
             matchScore: bestScore,
           }});
+        }} else {{
+          const projected = projectedCandidateForFlight(flightMatch, frame, image);
+          if (projected) selected.push(projected);
         }}
       }});
 
