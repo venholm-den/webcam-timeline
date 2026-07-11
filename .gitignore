@@ -2,6 +2,7 @@ data/images/
 data/timeline.csv
 data/timeline.html
 data/flights.csv
+data/cameras.csv
 data/log.txt
 data/server.log
 data/server.err.log

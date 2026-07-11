@@ -58,6 +58,23 @@ same webcam and scores moving objects against the expected aircraft type. It
 labels the best visual match with the callsign/type. It is a local visual aid,
 not a guaranteed aircraft classifier.
 
+For better highlighting, add camera position/direction data to:
+
+```text
+data\cameras.csv
+```
+
+Use `data\cameras.example.csv` as the template:
+
+```text
+page_name,latitude,longitude,heading_deg,horizontal_fov_deg,vertical_fov_deg,pitch_deg,elevation_ft
+```
+
+Required fields are `page_name`, `latitude`, `longitude`, and `heading_deg`.
+Use `Webcam 1` and `Webcam 2` for `page_name`. The heading is the compass
+direction the camera points, where north is `0`, east is `90`, south is `180`,
+and west is `270`. Field-of-view and pitch can be approximate and tuned later.
+
 ## Flight Info
 
 The timeline page reads optional flight rows from:

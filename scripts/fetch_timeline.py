@@ -56,6 +56,16 @@ FLIGHT_COLUMNS = [
     "distance_nm",
     "provider",
 ]
+CAMERA_COLUMNS = [
+    "page_name",
+    "latitude",
+    "longitude",
+    "heading_deg",
+    "horizontal_fov_deg",
+    "vertical_fov_deg",
+    "pitch_deg",
+    "elevation_ft",
+]
 
 
 @dataclass(frozen=True)
@@ -156,6 +166,23 @@ def read_flights(csv_path: Path) -> list[dict[str, str]]:
 
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def read_cameras(csv_path: Path) -> dict[str, dict[str, str]]:
+    if not csv_path.exists():
+        return {}
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    cameras: dict[str, dict[str, str]] = {}
+    for row in rows:
+        page_name = str(row.get("page_name", "")).strip()
+        if not page_name:
+            continue
+        cameras[page_name] = {key: str(row.get(key, "")).strip() for key in CAMERA_COLUMNS}
+
+    return cameras
 
 
 def normalize_flight_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -708,14 +735,21 @@ def save_images(page_urls: list[str], output_dir: Path, csv_path: Path) -> tuple
     return new_count, skipped_count
 
 
-def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None = None) -> None:
+def write_html(
+    path: Path,
+    rows: list[dict[str, Any]],
+    flights_path: Path | None = None,
+    cameras_path: Path | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [normalize_row(row) for row in rows]
     rows = sorted(rows, key=lambda row: str(row.get("timeline_timestamp_utc", "")))
     cards = []
     frames = []
     flights_path = flights_path or PROJECT_ROOT / "data" / "flights.csv"
+    cameras_path = cameras_path or PROJECT_ROOT / "data" / "cameras.csv"
     flight_rows = read_flights(flights_path)
+    camera_configs = read_cameras(cameras_path)
 
     for index, row in enumerate(rows):
         local_path_raw = str(row.get("local_path", ""))
@@ -748,6 +782,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
 
     frames_json = json.dumps(frames)
     flights_json = json.dumps(flight_rows)
+    cameras_json = json.dumps(camera_configs)
 
     page = f"""<!doctype html>
 <html lang="en">
@@ -1232,6 +1267,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
   <script>
     const frames = {frames_json};
     const flights = {flights_json};
+    const cameraConfigs = {cameras_json};
     const FLIGHT_WINDOW_MINUTES = 10;
     const TARGET_ICAO = "{TARGET_ICAO}";
     const stage = document.querySelector(".stage");
@@ -1494,6 +1530,91 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
         .sort((a, b) => a.diffMinutes - b.diffMinutes);
     }}
 
+    function numericValue(value) {{
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }}
+
+    function radians(degrees) {{
+      return degrees * Math.PI / 180;
+    }}
+
+    function degrees(radiansValue) {{
+      return radiansValue * 180 / Math.PI;
+    }}
+
+    function bearingDeg(lat1, lon1, lat2, lon2) {{
+      const phi1 = radians(lat1);
+      const phi2 = radians(lat2);
+      const deltaLon = radians(lon2 - lon1);
+      const y = Math.sin(deltaLon) * Math.cos(phi2);
+      const x = Math.cos(phi1) * Math.sin(phi2) -
+        Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLon);
+      return (degrees(Math.atan2(y, x)) + 360) % 360;
+    }}
+
+    function distanceMeters(lat1, lon1, lat2, lon2) {{
+      const radiusMeters = 6371000;
+      const phi1 = radians(lat1);
+      const phi2 = radians(lat2);
+      const deltaPhi = radians(lat2 - lat1);
+      const deltaLon = radians(lon2 - lon1);
+      const a = Math.sin(deltaPhi / 2) ** 2 +
+        Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLon / 2) ** 2;
+      return radiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }}
+
+    function angleDeltaDeg(angle, reference) {{
+      return ((((angle - reference) % 360) + 540) % 360) - 180;
+    }}
+
+    function cameraForFrame(frame) {{
+      if (!frame) return null;
+      return cameraConfigs[frame.pageName] || cameraConfigs[frame.sourceName] || null;
+    }}
+
+    function projectedFlightPoint(row, frame) {{
+      const camera = cameraForFrame(frame);
+      if (!camera) return null;
+
+      const cameraLat = numericValue(camera.latitude);
+      const cameraLon = numericValue(camera.longitude);
+      const aircraftLat = numericValue(row.latitude);
+      const aircraftLon = numericValue(row.longitude);
+      const heading = numericValue(camera.heading_deg);
+      const horizontalFov = numericValue(camera.horizontal_fov_deg) || 70;
+      const verticalFov = numericValue(camera.vertical_fov_deg) || 40;
+      const pitch = numericValue(camera.pitch_deg) || 0;
+
+      if ([cameraLat, cameraLon, aircraftLat, aircraftLon, heading].some((value) => value === null)) {{
+        return null;
+      }}
+
+      const bearing = bearingDeg(cameraLat, cameraLon, aircraftLat, aircraftLon);
+      const relativeBearing = angleDeltaDeg(bearing, heading);
+      const xNorm = 0.5 + relativeBearing / horizontalFov;
+
+      let yNorm = 0.5;
+      const altitudeFt = String(row.altitude_ft || "").toLowerCase() === "ground"
+        ? 0
+        : numericValue(row.altitude_ft);
+      const cameraElevationFt = numericValue(camera.elevation_ft) || 0;
+      if (altitudeFt !== null) {{
+        const rangeMeters = Math.max(1, distanceMeters(cameraLat, cameraLon, aircraftLat, aircraftLon));
+        const heightMeters = (altitudeFt - cameraElevationFt) * 0.3048;
+        const elevationDeg = degrees(Math.atan2(heightMeters, rangeMeters));
+        yNorm = 0.5 - (elevationDeg - pitch) / verticalFov;
+      }}
+
+      return {{
+        xNorm,
+        yNorm,
+        bearing,
+        relativeBearing,
+        inView: xNorm >= -0.15 && xNorm <= 1.15 && yNorm >= -0.25 && yNorm <= 1.25,
+      }};
+    }}
+
     function aircraftProfile(row) {{
       const text = [
         row.aircraft_type,
@@ -1517,7 +1638,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
       return {{ group: "aircraft", aspect: 2.2, minArea: 8, maxArea: 850 }};
     }}
 
-    function scoreCandidateForFlight(candidate, flightMatch) {{
+    function scoreCandidateForFlight(candidate, flightMatch, frame, image) {{
       const row = flightMatch.row;
       const profile = aircraftProfile(row);
       const aspect = Math.max(candidate.width, candidate.height) / Math.max(1, Math.min(candidate.width, candidate.height));
@@ -1529,11 +1650,31 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
         : Math.max(0, 1 - Math.abs(area - expectedArea) / Math.max(expectedArea, 1));
       const timeScore = Math.max(0, 1 - flightMatch.diffMinutes / FLIGHT_WINDOW_MINUTES);
       const motionScore = Math.min(1, candidate.score / 120);
+      const projection = projectedFlightPoint(row, frame);
 
-      return motionScore * 0.42 + aspectScore * 0.28 + areaScore * 0.18 + timeScore * 0.12;
+      if (!projection) {{
+        return motionScore * 0.42 + aspectScore * 0.28 + areaScore * 0.18 + timeScore * 0.12;
+      }}
+
+      const imageWidth = image.naturalWidth || image.width || 1;
+      const imageHeight = image.naturalHeight || image.height || 1;
+      const candidateX = (candidate.x + candidate.width / 2) / imageWidth;
+      const candidateY = (candidate.y + candidate.height / 2) / imageHeight;
+      const dx = candidateX - projection.xNorm;
+      const dy = candidateY - projection.yNorm;
+      const projectionDistance = Math.sqrt(dx * dx + dy * dy);
+      const positionScore = Math.max(0, 1 - projectionDistance * 3.0);
+      const viewScore = projection.inView ? 1 : 0.25;
+
+      return motionScore * 0.26 +
+        aspectScore * 0.18 +
+        areaScore * 0.12 +
+        timeScore * 0.12 +
+        positionScore * 0.28 +
+        viewScore * 0.04;
     }}
 
-    function flightAwareCandidates(candidates, flightMatches) {{
+    function flightAwareCandidates(candidates, flightMatches, frame, image) {{
       const selected = [];
       const used = new Set();
 
@@ -1544,7 +1685,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
 
         candidates.forEach((candidate, candidateIndex) => {{
           if (used.has(candidateIndex)) return;
-          const score = scoreCandidateForFlight(candidate, flightMatch);
+          const score = scoreCandidateForFlight(candidate, flightMatch, frame, image);
           if (score > bestScore) {{
             best = candidate;
             bestIndex = candidateIndex;
@@ -1601,7 +1742,7 @@ def write_html(path: Path, rows: list[dict[str, Any]], flights_path: Path | None
         if (elements.overlay.dataset.analysisToken !== token) return;
 
         const candidates = findMovingCandidates(currentImage, previousImage);
-        const selected = flightAwareCandidates(candidates, flightMatches);
+        const selected = flightAwareCandidates(candidates, flightMatches, frame, currentImage);
         drawCandidateBoxes(elements.overlay, elements.image, selected);
         elements.status.textContent = selected.length
           ? `${{selected.length}} flight match`
@@ -1985,6 +2126,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="data/images", help="Directory for downloaded images.")
     parser.add_argument("--csv", default="data/timeline.csv", help="Timeline metadata CSV path.")
     parser.add_argument("--flights-csv", default="data/flights.csv", help="Flight metadata CSV path.")
+    parser.add_argument("--cameras-csv", default="data/cameras.csv", help="Optional camera position and direction CSV path.")
     parser.add_argument("--no-flights", action="store_true", help="Do not fetch live flight data.")
     parser.add_argument("--flight-radius-nm", type=float, default=DEFAULT_FLIGHT_RADIUS_NM, help="Aircraft search radius around EGPG in nautical miles.")
     parser.add_argument("--flight-max-altitude-ft", type=float, default=DEFAULT_FLIGHT_MAX_ALTITUDE_FT, help="Maximum aircraft altitude to keep for EGPG-local matching.")
@@ -2000,6 +2142,7 @@ def main() -> int:
     output_dir = PROJECT_ROOT / args.output_dir
     csv_path = PROJECT_ROOT / args.csv
     flights_csv_path = PROJECT_ROOT / args.flights_csv
+    cameras_csv_path = PROJECT_ROOT / args.cameras_csv
     page_urls = args.page_url or DEFAULT_PAGE_URLS
 
     if not args.once and not args.watch:
@@ -2023,7 +2166,7 @@ def main() -> int:
                 max_altitude_ft=args.flight_max_altitude_ft,
             )
 
-        write_html(PROJECT_ROOT / "data" / "timeline.html", read_existing(csv_path), flights_csv_path)
+        write_html(PROJECT_ROOT / "data" / "timeline.html", read_existing(csv_path), flights_csv_path, cameras_csv_path)
 
         print(
             f"{datetime.now().isoformat(timespec='seconds')} "
