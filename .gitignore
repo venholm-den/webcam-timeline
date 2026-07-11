@@ -7,6 +7,7 @@ data/server.log
 data/server.err.log
 data/cloudflared.log
 data/cloudflared.err.log
+data/public_url.txt
 data/debug_*
 data/*.jpg
 __pycache__/

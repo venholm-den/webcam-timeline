@@ -190,6 +190,41 @@ https://your-tunnel-url.trycloudflare.com/data/timeline.html
 Leave both the fetcher and the history server running if you want the public
 page to keep updating.
 
+## Always-On Public Hosting
+
+Use this launcher for Windows Task Scheduler:
+
+```text
+start_history_hosting.bat
+```
+
+It starts the local history server if needed, starts a Cloudflare quick tunnel,
+and writes the current public URL to:
+
+```text
+data\public_url.txt
+```
+
+That file contains a `timeline_url=...` line you can copy and send.
+
+Recommended Task Scheduler setup:
+
+```text
+Trigger: At log on
+Action:  Start a program
+Program: C:\Users\kyle_\.openclaw\workspace\webcam_timeline\start_history_hosting.bat
+Start in: C:\Users\kyle_\.openclaw\workspace\webcam_timeline
+```
+
+Enable these task settings:
+
+```text
+Run only when user is logged on
+Run task as soon as possible after a scheduled start is missed
+If the task fails, restart every 1 minute
+Stop the task if it runs longer than: Disabled
+```
+
 ## Custom Page Selection
 
 By default the script fetches both webcam pages. To fetch only one page, pass
