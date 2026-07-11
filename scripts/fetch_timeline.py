@@ -514,6 +514,45 @@ def parse_iso_datetime(value: str) -> datetime | None:
         return None
 
 
+def solar_altitude_deg(moment: datetime, lat: float = EGPG_LAT, lon: float = EGPG_LON) -> float:
+    moment = moment.astimezone(timezone.utc)
+    day_of_year = moment.timetuple().tm_yday
+    hour = moment.hour + moment.minute / 60 + moment.second / 3600
+    gamma = 2 * math.pi / 365 * (day_of_year - 1 + (hour - 12) / 24)
+    equation_of_time = 229.18 * (
+        0.000075
+        + 0.001868 * math.cos(gamma)
+        - 0.032077 * math.sin(gamma)
+        - 0.014615 * math.cos(2 * gamma)
+        - 0.040849 * math.sin(2 * gamma)
+    )
+    declination = (
+        0.006918
+        - 0.399912 * math.cos(gamma)
+        + 0.070257 * math.sin(gamma)
+        - 0.006758 * math.cos(2 * gamma)
+        + 0.000907 * math.sin(2 * gamma)
+        - 0.002697 * math.cos(3 * gamma)
+        + 0.00148 * math.sin(3 * gamma)
+    )
+    true_solar_minutes = (moment.hour * 60 + moment.minute + moment.second / 60 + equation_of_time + 4 * lon) % 1440
+    hour_angle = math.radians(true_solar_minutes / 4 - 180)
+    latitude = math.radians(lat)
+    altitude = math.asin(
+        math.sin(latitude) * math.sin(declination)
+        + math.cos(latitude) * math.cos(declination) * math.cos(hour_angle)
+    )
+    return math.degrees(altitude)
+
+
+def is_sun_up(timestamp: str) -> bool:
+    moment = parse_iso_datetime(timestamp)
+    if moment is None:
+        return True
+
+    return solar_altitude_deg(moment) > -0.833
+
+
 def camera_slot(source_name: str) -> int | None:
     match = CAMERA_NAME_RE.search(source_name)
     if not match:
@@ -653,9 +692,50 @@ def row_key(page_name: str, sha: str) -> str:
     return f"{page_name}|{sha}"
 
 
-def save_images(page_urls: list[str], output_dir: Path, csv_path: Path) -> tuple[int, int]:
+def delete_local_image(row: dict[str, Any]) -> bool:
+    local_path = str(row.get("local_path", "")).strip()
+    if not local_path:
+        return False
+
+    target = (PROJECT_ROOT / local_path).resolve()
+    images_root = (PROJECT_ROOT / "data" / "images").resolve()
+
+    try:
+        target.relative_to(images_root)
+    except ValueError:
+        return False
+
+    if not target.exists() or not target.is_file():
+        return False
+
+    target.unlink()
+    return True
+
+
+def prune_night_rows(rows: list[dict[str, Any]], delete_images: bool) -> tuple[list[dict[str, Any]], int]:
+    kept: list[dict[str, Any]] = []
+    removed = 0
+
+    for row in rows:
+        normalized = normalize_row(row)
+        timestamp = str(normalized.get("timeline_timestamp_utc", ""))
+        if is_sun_up(timestamp):
+            kept.append(normalized)
+            continue
+
+        removed += 1
+        if delete_images:
+            delete_local_image(normalized)
+
+    return kept, removed
+
+
+def save_images(page_urls: list[str], output_dir: Path, csv_path: Path, delete_night_images: bool = True) -> tuple[int, int, int]:
     captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     existing = [normalize_row(row) for row in read_existing(csv_path)]
+    night_removed = 0
+    if delete_night_images:
+        existing, night_removed = prune_night_rows(existing, delete_images=True)
     known_keys = {row_key(str(row.get("page_name", "")), str(row.get("sha256", ""))) for row in existing}
     rows_by_key = {
         row_key(str(row.get("page_name", "")), str(row.get("sha256", ""))): row
@@ -691,6 +771,10 @@ def save_images(page_urls: list[str], output_dir: Path, csv_path: Path) -> tuple
             source_name = ref.alt or ref.title or Path(urllib.parse.urlparse(ref.url).path).stem
             slot = camera_slot(source_name)
             timeline_timestamp = estimate_timeline_timestamp(image_timestamp, captured_at, source_name)
+            if delete_night_images and not is_sun_up(timeline_timestamp):
+                skipped_count += 1
+                continue
+
             key = row_key(page_name, sha)
 
             if key in known_keys:
@@ -731,9 +815,12 @@ def save_images(page_urls: list[str], output_dir: Path, csv_path: Path) -> tuple
             new_count += 1
 
     rows = [normalize_row(row) for row in rows]
+    if delete_night_images:
+        rows, extra_night_removed = prune_night_rows(rows, delete_images=True)
+        night_removed += extra_night_removed
     write_timeline(csv_path, rows)
 
-    return new_count, skipped_count
+    return new_count, skipped_count, night_removed
 
 
 def write_html(
@@ -2684,6 +2771,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--flights-csv", default="data/flights.csv", help="Flight metadata CSV path.")
     parser.add_argument("--cameras-csv", default="data/cameras.csv", help="Optional camera position and direction CSV path.")
     parser.add_argument("--no-flights", action="store_true", help="Do not fetch live flight data.")
+    parser.add_argument("--keep-night-images", action="store_true", help="Keep images whose corrected timeline timestamp is after sunset/before sunrise.")
     parser.add_argument("--flight-radius-nm", type=float, default=DEFAULT_FLIGHT_RADIUS_NM, help="Aircraft search radius around EGPG in nautical miles.")
     parser.add_argument("--flight-max-altitude-ft", type=float, default=DEFAULT_FLIGHT_MAX_ALTITUDE_FT, help="Maximum aircraft altitude to keep for EGPG-local matching.")
     parser.add_argument("--once", action="store_true", help="Fetch once and exit.")
@@ -2705,10 +2793,11 @@ def main() -> int:
         args.once = True
 
     while True:
-        new_count, skipped_count = save_images(
+        new_count, skipped_count, night_removed = save_images(
             page_urls=page_urls,
             output_dir=output_dir,
             csv_path=csv_path,
+            delete_night_images=not args.keep_night_images,
         )
         flight_new_count = 0
         flight_provider = "disabled"
@@ -2727,6 +2816,7 @@ def main() -> int:
         print(
             f"{datetime.now().isoformat(timespec='seconds')} "
             f"pages={len(page_urls)} new={new_count} skipped={skipped_count} "
+            f"night_removed={night_removed} "
             f"flight_provider={flight_provider} flight_new={flight_new_count} timeline={csv_path}"
         )
 

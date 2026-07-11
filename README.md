@@ -36,6 +36,14 @@ data\timeline.csv  metadata
 data\timeline.html local visual timeline player
 ```
 
+By default the fetcher deletes/omits frames taken while the sun is down at
+Cumbernauld, based on the corrected `timeline_timestamp_utc`. To keep night
+frames for a run:
+
+```powershell
+python .\scripts\fetch_timeline.py --once --keep-night-images
+```
+
 Open:
 
 ```text
