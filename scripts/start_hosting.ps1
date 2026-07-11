@@ -5,6 +5,8 @@ $DataDir = Join-Path $ProjectRoot "data"
 $PublicUrlFile = Join-Path $DataDir "public_url.txt"
 $ServerLog = Join-Path $DataDir "server.log"
 $ServerErrLog = Join-Path $DataDir "server.err.log"
+$FetcherLog = Join-Path $DataDir "fetcher.log"
+$FetcherErrLog = Join-Path $DataDir "fetcher.err.log"
 $TunnelLog = Join-Path $DataDir "cloudflared.log"
 $TunnelErrLog = Join-Path $DataDir "cloudflared.err.log"
 $LocalUrl = "http://127.0.0.1:8000"
@@ -48,6 +50,39 @@ function Find-Cloudflared {
     throw "cloudflared.exe was not found. Install Cloudflare Tunnel or add cloudflared to PATH."
 }
 
+function Find-Python {
+    $Candidates = @()
+
+    try {
+        $Candidates += where.exe python 2>$null
+    } catch {
+    }
+
+    $Preferred = $Candidates |
+        Where-Object {
+            $_ -and
+            $_ -notlike "*hermes-agent*" -and
+            $_ -notlike "*WindowsApps*"
+        } |
+        Select-Object -First 1
+
+    if ($Preferred) {
+        return $Preferred
+    }
+
+    $Command = Get-Command python -ErrorAction SilentlyContinue
+    if ($Command) {
+        return $Command.Source
+    }
+
+    $PyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($PyLauncher) {
+        return $PyLauncher.Source
+    }
+
+    throw "Python was not found. Install Python or add python.exe to PATH."
+}
+
 function Get-ListeningProcessOnPort {
     $Connection = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $Connection) {
@@ -64,7 +99,7 @@ function Ensure-HistoryServer {
     }
 
     $Server = Start-Process `
-        -FilePath "python" `
+        -FilePath $Python `
         -ArgumentList ".\scripts\serve_history.py --host 0.0.0.0 --port 8000" `
         -WorkingDirectory $ProjectRoot `
         -WindowStyle Hidden `
@@ -79,6 +114,46 @@ function Ensure-HistoryServer {
     }
 
     return $Server.Id
+}
+
+function Get-ExistingFetcher {
+    $Process = Get-CimInstance Win32_Process |
+        Where-Object {
+            $_.Name -like "python*" -and
+            $_.CommandLine -like "*fetch_timeline.py*" -and
+            $_.CommandLine -like "*--watch*"
+        } |
+        Select-Object -First 1
+
+    if (-not $Process) {
+        return $null
+    }
+
+    return Get-Process -Id $Process.ProcessId -ErrorAction SilentlyContinue
+}
+
+function Ensure-Fetcher {
+    $Process = Get-ExistingFetcher
+    if ($Process) {
+        return $Process.Id
+    }
+
+    $Fetcher = Start-Process `
+        -FilePath $Python `
+        -ArgumentList ".\scripts\fetch_timeline.py --watch --interval 60" `
+        -WorkingDirectory $ProjectRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $FetcherLog `
+        -RedirectStandardError $FetcherErrLog `
+        -PassThru
+
+    Start-Sleep -Seconds 2
+
+    if ($Fetcher.HasExited) {
+        throw "Timeline fetcher exited with code $($Fetcher.ExitCode). See $FetcherErrLog"
+    }
+
+    return $Fetcher.Id
 }
 
 function Get-ExistingHistoryTunnel {
@@ -100,6 +175,7 @@ function Write-PublicUrlFile {
     param(
         [string] $TunnelUrl,
         [int] $ServerPid,
+        [int] $FetcherPid,
         [int] $TunnelPid,
         [string] $Status
     )
@@ -113,6 +189,7 @@ function Write-PublicUrlFile {
         "tunnel_url=$TunnelUrl",
         "local_url=$LocalUrl$TimelinePath",
         "server_pid=$ServerPid",
+        "fetcher_pid=$FetcherPid",
         "tunnel_pid=$TunnelPid",
         "log_file=$TunnelLog"
     )
@@ -175,9 +252,11 @@ function Read-KnownTunnelUrl {
 
 Exit-IfAnotherLauncherIsRunning
 $Cloudflared = Find-Cloudflared
+$Python = Find-Python
 
 while ($true) {
     $ServerPid = Ensure-HistoryServer
+    $FetcherPid = Ensure-Fetcher
     $Tunnel = Get-ExistingHistoryTunnel
 
     if ($Tunnel) {
@@ -186,7 +265,7 @@ while ($true) {
             $TunnelUrl = Wait-ForTunnelUrl
         }
 
-        Write-PublicUrlFile -TunnelUrl $TunnelUrl -ServerPid $ServerPid -TunnelPid $Tunnel.Id -Status "running"
+        Write-PublicUrlFile -TunnelUrl $TunnelUrl -ServerPid $ServerPid -FetcherPid $FetcherPid -TunnelPid $Tunnel.Id -Status "running"
         Write-Host "Reusing existing Cloudflare tunnel PID $($Tunnel.Id)."
     } else {
         Remove-Item $TunnelLog, $TunnelErrLog -ErrorAction SilentlyContinue
@@ -202,11 +281,11 @@ while ($true) {
 
         $TunnelUrl = Wait-ForTunnelUrl
         if ($TunnelUrl) {
-            Write-PublicUrlFile -TunnelUrl $TunnelUrl -ServerPid $ServerPid -TunnelPid $Tunnel.Id -Status "running"
+            Write-PublicUrlFile -TunnelUrl $TunnelUrl -ServerPid $ServerPid -FetcherPid $FetcherPid -TunnelPid $Tunnel.Id -Status "running"
             Write-Host "Timeline URL: $TunnelUrl$TimelinePath"
             Write-Host "Wrote: $PublicUrlFile"
         } else {
-            Write-PublicUrlFile -TunnelUrl "" -ServerPid $ServerPid -TunnelPid $Tunnel.Id -Status "starting_or_failed"
+            Write-PublicUrlFile -TunnelUrl "" -ServerPid $ServerPid -FetcherPid $FetcherPid -TunnelPid $Tunnel.Id -Status "starting_or_failed"
             Write-Host "Tunnel URL was not found yet. Check: $TunnelLog"
         }
     }
@@ -216,6 +295,6 @@ while ($true) {
         $Tunnel.Refresh()
     }
 
-    Write-PublicUrlFile -TunnelUrl $TunnelUrl -ServerPid $ServerPid -TunnelPid $Tunnel.Id -Status "restarting"
+    Write-PublicUrlFile -TunnelUrl $TunnelUrl -ServerPid $ServerPid -FetcherPid $FetcherPid -TunnelPid $Tunnel.Id -Status "restarting"
     Start-Sleep -Seconds 5
 }

@@ -198,8 +198,9 @@ Use this launcher for Windows Task Scheduler:
 start_history_hosting.bat
 ```
 
-It starts the local history server if needed, starts a Cloudflare quick tunnel,
-and writes the current public URL to:
+It starts the local history server if needed, keeps the image/flight fetcher
+running every 60 seconds, starts a Cloudflare quick tunnel, and writes the
+current public URL to:
 
 ```text
 data\public_url.txt
