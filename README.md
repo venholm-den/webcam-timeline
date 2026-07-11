@@ -57,10 +57,11 @@ timestamp, then compares the current image with the previous image from the
 same webcam and scores moving objects against the expected aircraft type. It
 labels the best visual match with the callsign/type.
 
-The `Visible aircraft` toggle scans the current image for aircraft-shaped
-features regardless of whether the aircraft is flying, parked, or in the flight
-log. This is useful for foreground parked aircraft and helicopters. Both
-toggles are local visual aids, not guaranteed aircraft classifiers.
+The `Visible aircraft` toggle loads a browser-side COCO-SSD object detector and
+looks for `airplane` objects in the current image, regardless of whether the
+aircraft is flying, parked, or in the flight log. If the model cannot load or
+does not find anything, the page falls back to the local shape scan. Both
+toggles are visual aids, not guaranteed aircraft classifiers.
 
 For better highlighting, add camera position/direction data to:
 

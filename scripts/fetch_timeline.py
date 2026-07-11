@@ -1273,6 +1273,8 @@ def write_html(
     const flights = {flights_json};
     const cameraConfigs = {cameras_json};
     const FLIGHT_WINDOW_MINUTES = 10;
+    const TFJS_URL = "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js";
+    const COCO_SSD_URL = "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js";
     const TARGET_ICAO = "{TARGET_ICAO}";
     const stage = document.querySelector(".stage");
     const themeToggle = document.getElementById("themeToggle");
@@ -1316,6 +1318,7 @@ def write_html(
       slots: [frameIndex],
     }}));
     let timer = null;
+    let aircraftModelPromise = null;
 
     function localDateKey(timestamp) {{
       const date = new Date(timestamp);
@@ -1373,6 +1376,62 @@ def write_html(
         image.onerror = reject;
         image.src = src;
       }});
+    }}
+
+    function loadScript(src) {{
+      return new Promise((resolve, reject) => {{
+        const existing = document.querySelector(`script[src="${{src}}"]`);
+        if (existing) {{
+          existing.addEventListener("load", resolve, {{ once: true }});
+          existing.addEventListener("error", reject, {{ once: true }});
+          if (existing.dataset.loaded === "true") resolve();
+          return;
+        }}
+
+        const script = document.createElement("script");
+        script.src = src;
+        script.async = true;
+        script.onload = () => {{
+          script.dataset.loaded = "true";
+          resolve();
+        }};
+        script.onerror = reject;
+        document.head.appendChild(script);
+      }});
+    }}
+
+    function loadAircraftModel() {{
+      if (!aircraftModelPromise) {{
+        aircraftModelPromise = Promise.resolve()
+          .then(() => loadScript(TFJS_URL))
+          .then(() => loadScript(COCO_SSD_URL))
+          .then(() => window.cocoSsd.load());
+      }}
+      return aircraftModelPromise;
+    }}
+
+    async function findModelAircraftCandidates(image) {{
+      const model = await loadAircraftModel();
+      const predictions = await model.detect(image);
+
+      return predictions
+        .filter((prediction) => prediction.class === "airplane" && prediction.score >= 0.32)
+        .map((prediction) => {{
+          const [x, y, width, height] = prediction.bbox;
+          return {{
+            x,
+            y,
+            width,
+            height,
+            score: prediction.score,
+            label: `AI airplane ${{Math.round(prediction.score * 100)}}%`,
+            stroke: "#38bdf8",
+            fill: "rgba(56, 189, 248, 0.16)",
+            labelText: "#e0f2fe",
+          }};
+        }})
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8);
     }}
 
     function drawCandidateBoxes(canvas, imageElement, candidates) {{
@@ -1524,7 +1583,7 @@ def write_html(
         .slice(0, 6);
     }}
 
-    function findVisibleAircraftCandidates(image) {{
+    function findShapeAircraftCandidates(image) {{
       const sourceWidth = image.naturalWidth || image.width;
       const sourceHeight = image.naturalHeight || image.height;
       const scale = Math.min(1, 420 / sourceWidth);
@@ -1646,6 +1705,21 @@ def write_html(
       return candidates
         .sort((a, b) => b.score - a.score)
         .slice(0, 8);
+    }}
+
+    async function findVisibleAircraftCandidates(image) {{
+      try {{
+        const modelCandidates = await findModelAircraftCandidates(image);
+        if (modelCandidates.length) {{
+          return {{ candidates: modelCandidates, source: "AI" }};
+        }}
+      }} catch (_error) {{
+      }}
+
+      return {{
+        candidates: findShapeAircraftCandidates(image),
+        source: "shape",
+      }};
     }}
 
     function matchingFlightsForTimestamp(timestamp) {{
@@ -1897,9 +1971,10 @@ def write_html(
         const statusParts = [];
 
         if (visibleAircraftToggle.checked) {{
-          const visibleCandidates = findVisibleAircraftCandidates(currentImage);
+          const visibleResult = await findVisibleAircraftCandidates(currentImage);
+          const visibleCandidates = visibleResult.candidates;
           selected.push(...visibleCandidates);
-          statusParts.push(`${{visibleCandidates.length}} visible`);
+          statusParts.push(`${{visibleCandidates.length}} visible (${{visibleResult.source}})`);
         }}
 
         if (aircraftOverlayToggle.checked) {{
