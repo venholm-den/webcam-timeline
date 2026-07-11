@@ -15,5 +15,5 @@ echo Starting public Cloudflare tunnel for http://127.0.0.1:8000
 echo.
 echo Keep this window open. Copy the trycloudflare.com URL it prints.
 echo.
-"%CLOUDFLARED%" tunnel --protocol http2 --url http://127.0.0.1:8000
+"%CLOUDFLARED%" tunnel --protocol http2 --edge-ip-version 4 --url http://127.0.0.1:8000
 pause
