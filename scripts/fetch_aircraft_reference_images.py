@@ -32,10 +32,56 @@ METADATA_COLUMNS = [
 ]
 AIRCRAFT_TYPE_ALIASES = {
     "A109": "AgustaWestland AW109 helicopter",
+    "AS50": "Airbus H125 AS350 helicopter",
+    "AS55": "Eurocopter AS355 helicopter",
+    "AS65": "Eurocopter AS365 Dauphin helicopter",
+    "B06": "Bell 206 JetRanger helicopter",
+    "BN2P": "Britten-Norman BN-2 Islander aircraft",
+    "BN2T": "Britten-Norman BN-2 Islander aircraft",
+    "C152": "Cessna 152 aircraft",
+    "C172": "Cessna 172 Skyhawk aircraft",
+    "EC35": "Airbus Helicopters EC135 helicopter",
     "P28A": "Piper PA-28 aircraft",
     "PA28": "Piper PA-28 aircraft",
     "PC12": "Pilatus PC-12 aircraft",
+    "R22": "Robinson R22 helicopter",
+    "R44": "Robinson R44 helicopter",
 }
+COMMON_CUMBERNAULD_QUERIES = [
+    ("Cessna 152", "C152", "Cessna 152 aircraft"),
+    ("Cessna 172", "C172", "Cessna 172 Skyhawk aircraft"),
+    ("Piper PA-28", "PA28", "Piper PA-28 aircraft"),
+    ("Piper Warrior", "PA28", "Piper PA-28 Warrior aircraft"),
+    ("Piper Archer", "PA28", "Piper PA-28 Archer aircraft"),
+    ("Pilatus PC-12", "PC12", "Pilatus PC-12 aircraft"),
+    ("Britten-Norman Islander", "BN2P", "Britten-Norman BN-2 Islander aircraft"),
+    ("Airbus H125", "AS50", "Airbus H125 AS350 helicopter"),
+    ("Eurocopter AS355", "AS55", "Eurocopter AS355 helicopter"),
+    ("Eurocopter AS365", "AS65", "Eurocopter AS365 Dauphin helicopter"),
+    ("Airbus EC135", "EC35", "Airbus Helicopters EC135 helicopter"),
+    ("AgustaWestland AW109", "A109", "AgustaWestland AW109 helicopter"),
+    ("Robinson R22", "R22", "Robinson R22 helicopter"),
+    ("Robinson R44", "R44", "Robinson R44 helicopter"),
+    ("Bell 206", "B06", "Bell 206 JetRanger helicopter"),
+]
+
+
+def dedupe_queries(queries: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+    deduped: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+
+    for name, aircraft_type, query in queries:
+        key = query.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((name, aircraft_type, query))
+
+    return deduped
+
+
+def common_cumbernauld_queries() -> list[tuple[str, str, str]]:
+    return list(COMMON_CUMBERNAULD_QUERIES)
 
 
 def request_json(url: str) -> dict[str, Any]:
@@ -267,6 +313,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--metadata", default="data/aircraft_crops/references.csv", help="Metadata CSV for downloaded references.")
     parser.add_argument("--limit-per-query", type=int, default=3, help="Maximum Commons results per query.")
     parser.add_argument("--pause-seconds", type=float, default=2.0, help="Pause between image downloads.")
+    parser.add_argument(
+        "--no-common-cumbernauld",
+        action="store_true",
+        help="Only use flight CSV and --query values, skipping the built-in common EGPG aircraft list.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Search and print matches without downloading.")
     return parser.parse_args()
 
@@ -275,14 +326,20 @@ def main() -> int:
     args = parse_args()
     output_dir = PROJECT_ROOT / args.output_dir
     metadata_path = PROJECT_ROOT / args.metadata
-    queries = read_flight_queries(PROJECT_ROOT / args.flights_csv)
+    queries: list[tuple[str, str, str]] = []
+
+    if not args.no_common_cumbernauld:
+        queries.extend(common_cumbernauld_queries())
+
+    queries.extend(read_flight_queries(PROJECT_ROOT / args.flights_csv))
 
     if args.query:
         for query in args.query:
             queries.append((query, "", query))
+    queries = dedupe_queries(queries)
 
     if not queries:
-        print("No queries found. Add --query or populate data/flights.csv.")
+        print("No queries found. Add --query, populate data/flights.csv, or remove --no-common-cumbernauld.")
         return 1
 
     downloaded = download_references(

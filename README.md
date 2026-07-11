@@ -74,11 +74,20 @@ data\aircraft_crops
 Use tight crops around the aircraft and names like `GZOFG_P28A_001.jpg`.
 Crop images are ignored by git.
 
-You can also fetch reference images from Wikimedia Commons using the current
-flight log:
+You can also fetch reference images from Wikimedia Commons. By default this
+uses a built-in Cumbernauld-focused list of common training, charter, and
+helicopter types, then adds anything seen in the current flight log:
 
 ```powershell
 python .\scripts\fetch_aircraft_reference_images.py
+```
+
+The common list includes Cessna 152/172, Piper PA-28 variants, Pilatus PC-12,
+Britten-Norman Islander, Airbus/Eurocopter helicopters, AgustaWestland AW109,
+Robinson R22/R44, and Bell 206. To use only the flight log and manual queries:
+
+```powershell
+python .\scripts\fetch_aircraft_reference_images.py --no-common-cumbernauld
 ```
 
 Or search manually:
