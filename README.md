@@ -59,9 +59,10 @@ labels the best visual match with the callsign/type.
 
 The `Visible aircraft` toggle loads a browser-side COCO-SSD object detector and
 looks for `airplane` objects in the current image, regardless of whether the
-aircraft is flying, parked, or in the flight log. If the model cannot load or
-does not find anything, the page falls back to the local shape scan. Both
-toggles are visual aids, not guaranteed aircraft classifiers.
+aircraft is flying, parked, or in the flight log. If a detection lines up with
+a projected flight row, the box is labelled with the callsign/type. If the model
+cannot confidently identify an aircraft, the page does not draw a fallback shape
+box. Both toggles are visual aids, not guaranteed aircraft classifiers.
 
 For better highlighting, add camera position/direction data to:
 

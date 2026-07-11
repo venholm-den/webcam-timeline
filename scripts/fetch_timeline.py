@@ -1415,7 +1415,7 @@ def write_html(
       const predictions = await model.detect(image);
 
       return predictions
-        .filter((prediction) => prediction.class === "airplane" && prediction.score >= 0.32)
+        .filter((prediction) => prediction.class === "airplane" && prediction.score >= 0.50)
         .map((prediction) => {{
           const [x, y, width, height] = prediction.bbox;
           return {{
@@ -1707,18 +1707,55 @@ def write_html(
         .slice(0, 8);
     }}
 
-    async function findVisibleAircraftCandidates(image) {{
+    function labelVisibleCandidate(candidate, frame, image) {{
+      const matches = matchingFlightsForTimestamp(frame.timestamp);
+      const imageWidth = image.naturalWidth || image.width || 1;
+      const imageHeight = image.naturalHeight || image.height || 1;
+      const candidateX = (candidate.x + candidate.width / 2) / imageWidth;
+      const candidateY = (candidate.y + candidate.height / 2) / imageHeight;
+      let best = null;
+
+      matches.forEach((match) => {{
+        const projection = projectedFlightPoint(match.row, frame);
+        if (!projection || !projection.inView) return;
+
+        const dx = candidateX - projection.xNorm;
+        const dy = candidateY - projection.yNorm;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const score = Math.max(0, 1 - distance * 5) * Math.max(0, 1 - match.diffMinutes / FLIGHT_WINDOW_MINUTES);
+
+        if (!best || score > best.score) {{
+          best = {{ match, score }};
+        }}
+      }});
+
+      if (best && best.score >= 0.25) {{
+        const row = best.match.row;
+        return {{
+          ...candidate,
+          label: [flightLabel(row), row.aircraft_type || aircraftProfile(row).group].filter(Boolean).join(" "),
+        }};
+      }}
+
+      return candidate;
+    }}
+
+    async function findVisibleAircraftCandidates(image, frame) {{
       try {{
         const modelCandidates = await findModelAircraftCandidates(image);
         if (modelCandidates.length) {{
-          return {{ candidates: modelCandidates, source: "AI" }};
+          return {{
+            candidates: modelCandidates.map((candidate) => labelVisibleCandidate(candidate, frame, image)),
+            source: "AI",
+          }};
         }}
       }} catch (_error) {{
+        return {{ candidates: [], source: "AI unavailable" }};
       }}
 
       return {{
-        candidates: findShapeAircraftCandidates(image),
-        source: "shape",
+        candidates: [],
+        source: "AI",
       }};
     }}
 
@@ -1971,7 +2008,7 @@ def write_html(
         const statusParts = [];
 
         if (visibleAircraftToggle.checked) {{
-          const visibleResult = await findVisibleAircraftCandidates(currentImage);
+          const visibleResult = await findVisibleAircraftCandidates(currentImage, frame);
           const visibleCandidates = visibleResult.candidates;
           selected.push(...visibleCandidates);
           statusParts.push(`${{visibleCandidates.length}} visible (${{visibleResult.source}})`);
